@@ -1,6 +1,6 @@
-env: configs/env/pyflyt_3v1.yaml
-algo: configs/algo/dream_mappo.yaml
-model: configs/model/dream_mappo_centralized.yaml
+env: configs/generated/env/pyflyt_3v1_speed_ratio_1to1_seed102.yaml
+algo: configs/algo/mappo.yaml
+model: configs/model/centralized_critic.yaml
 task:
   name: pursuit_evasion_3v1
   world_xy: 20.0

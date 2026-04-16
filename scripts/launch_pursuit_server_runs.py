@@ -24,6 +24,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIR = ROOT / "configs" / "generated"
+GENERATED_ENV_DIR = GENERATED_DIR / "env"
 
 
 def _base_train_cfg() -> dict[str, Any]:
@@ -59,6 +60,11 @@ def _base_train_cfg() -> dict[str, Any]:
         "log_interval": 1,
         "eval_episodes": 20,
     }
+
+
+def _base_env_cfg() -> dict[str, Any]:
+    with open(ROOT / "configs" / "env" / "pyflyt_3v1.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,12 +153,18 @@ def build_speed_ratio_runs(args: argparse.Namespace) -> list[tuple[str, dict[str
         ratio_tag = ratio_text.replace(":", "to")
         for seed in args.seeds:
             cfg = _base_train_cfg()
+            env_cfg = _base_env_cfg()
             cfg["seed"] = int(seed)
             cfg["task"]["name"] = "pursuit_evasion_3v1"
+            # Continuous control under PyFlyt 3v1 uses env.action_low/high as the true
+            # pursuer velocity bounds. Keep task speed in sync for normalization only.
             cfg["task"]["pursuer_speed"] = float(pursuer_speed)
             cfg["task"]["evader_speed"] = float(evader_speed)
+            env_cfg["action_low"] = [-float(pursuer_speed), -float(pursuer_speed), -0.01, -0.15]
+            env_cfg["action_high"] = [float(pursuer_speed), float(pursuer_speed), 0.01, 0.15]
             run_name = f"pursuit_speed_ratio_{ratio_tag}_seed{seed}"
-            runs.append((run_name, cfg))
+            env_name = f"pyflyt_3v1_speed_ratio_{ratio_tag}_seed{seed}"
+            runs.append((run_name, cfg, env_name, env_cfg))
     return runs
 
 
@@ -163,7 +175,7 @@ def build_role_assignment_runs(args: argparse.Namespace) -> list[tuple[str, dict
         cfg["seed"] = int(seed)
         cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
         run_name = f"pursuit_role_assignment_seed{seed}"
-        runs.append((run_name, cfg))
+        runs.append((run_name, cfg, None, None))
     return runs
 
 
@@ -177,11 +189,11 @@ def build_obstacle_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, A
         cfg["task"]["num_obstacles_max"] = 10
         cfg["task"]["obstacle_collision_penalty"] = 15.0
         run_name = f"pursuit_obstacles_seed{seed}"
-        runs.append((run_name, cfg))
+        runs.append((run_name, cfg, None, None))
     return runs
 
 
-def build_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
+def build_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any], str | None, dict[str, Any] | None]]:
     if args.experiment == "speed_ratio":
         return build_speed_ratio_runs(args)
     if args.experiment == "role_assignment":
@@ -197,6 +209,18 @@ def write_config(run_name: str, cfg: dict[str, Any], overwrite: bool) -> Path:
     if cfg_path.exists() and not overwrite:
         raise FileExistsError(
             f"Config already exists: {cfg_path}. Use --overwrite if you want to replace it."
+        )
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+    return cfg_path
+
+
+def write_env_config(env_name: str, cfg: dict[str, Any], overwrite: bool) -> Path:
+    GENERATED_ENV_DIR.mkdir(parents=True, exist_ok=True)
+    cfg_path = GENERATED_ENV_DIR / f"{env_name}.yaml"
+    if cfg_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Env config already exists: {cfg_path}. Use --overwrite if you want to replace it."
         )
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
@@ -229,15 +253,26 @@ def main() -> None:
     print(yaml.safe_dump(summary, allow_unicode=True, sort_keys=False).strip())
 
     generated: list[tuple[Path, dict[str, Any]]] = []
-    for run_name, cfg in runs:
+    for run_name, cfg, env_name, env_cfg in runs:
         cfg_copy = deepcopy(cfg)
+        if env_name is not None and env_cfg is not None:
+            env_cfg_copy = deepcopy(env_cfg)
+            env_path = write_env_config(env_name, env_cfg_copy, overwrite=args.overwrite)
+            cfg_copy["env"] = str(env_path.relative_to(ROOT)).replace("\\", "/")
         cfg_path = write_config(run_name, cfg_copy, overwrite=args.overwrite)
         generated.append((cfg_path, cfg_copy))
         task_cfg = cfg_copy["task"]
-        print(
+        env_rel = cfg_copy["env"]
+        msg = (
             f"[config] {cfg_path.relative_to(ROOT)} | seed={cfg_copy['seed']} "
-            f"| task={task_cfg['name']} | pursuer_speed={task_cfg['pursuer_speed']:.6f} "
-            f"| evader_speed={task_cfg['evader_speed']:.6f}"
+            f"| env={env_rel} | task={task_cfg['name']} | task.pursuer_speed={task_cfg['pursuer_speed']:.6f} "
+            f"| task.evader_speed={task_cfg['evader_speed']:.6f}"
+        )
+        if env_name is not None and env_cfg is not None:
+            env_hi = env_cfg["action_high"]
+            msg += f" | env.vxy_max={float(env_hi[0]):.6f}"
+        print(
+            msg
         )
 
     if args.dry_run:
