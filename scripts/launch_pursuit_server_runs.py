@@ -45,6 +45,11 @@ def _base_env_cfg() -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _base_env_cfg() -> dict[str, Any]:
+    with open(ROOT / "configs" / "env" / "pyflyt_3v1.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch 3v1 pursuit-evasion training experiments.")
     parser.add_argument(
@@ -130,10 +135,17 @@ def build_speed_ratio_runs(args: argparse.Namespace) -> list[tuple[str, dict[str
         pursuer_speed, evader_speed = speed_pair_for_ratio(args, ratio_text)
         ratio_tag = ratio_text.replace(":", "to")
         for seed in args.seeds:
+<<<<<<< HEAD
             cfg = _dream_ex1_train_cfg()
             env_cfg = _base_env_cfg()
             cfg["seed"] = int(seed)
             cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
+=======
+            cfg = _base_train_cfg()
+            env_cfg = _base_env_cfg()
+            cfg["seed"] = int(seed)
+            cfg["task"]["name"] = "pursuit_evasion_3v1"
+>>>>>>> 6e882f6 (修改了速度比配置)
             # Continuous control under PyFlyt 3v1 uses env.action_low/high as the true
             # pursuer velocity bounds. Keep task speed in sync for normalization only.
             cfg["task"]["pursuer_speed"] = float(pursuer_speed)
