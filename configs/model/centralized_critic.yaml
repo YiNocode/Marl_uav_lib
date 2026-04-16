@@ -1,0 +1,23 @@
+# Centralized critic model config
+#
+# 用于 CentralizedCriticPolicy：
+#   - actor_encoder 编码局部 obs
+#   - critic_encoder 编码全局 state
+
+type: centralized_critic
+
+# actor encoder 设置（局部观测）
+actor:
+  encoder_type: mlp
+  hidden_dims: [64, 64]
+  activation: relu
+
+# critic encoder 设置（全局 state）
+critic:
+  encoder_type: mlp
+  hidden_dims: [128, 128]
+  activation: relu
+
+# 是否共享 encoder backbone（第一版建议不共享）
+share_backbone: false
+

@@ -1,0 +1,36 @@
+# IPPO on PyFlyt PursuitEvasion3v1Task experiment config
+#
+# - Env:   PyFlytAviaryEnv + PursuitEvasion3v1Task
+# - Algo:  IPPO (independent PPO with shared actor-critic)
+# - Model: MLP actor-critic policy
+
+env: configs/env/pyflyt_3v1.yaml
+algo: configs/algo/ippo.yaml
+model: configs/model/mlp.yaml
+
+# PursuitEvasion3v1Task parameters
+task:
+  name: pursuit_evasion_3v1
+  world_xy: 20.0
+  z_min: 0.8
+  z_max: 2.5
+  capture_dist: 0.8
+  episode_limit: 500
+  pursuer_speed: 0.20
+  evader_speed: 2.0
+  min_pursuer_sep: 0.8
+  progress_reward_scale: 2.0
+  min_progress_reward_scale: 1.0
+  time_penalty: 0.02
+  capture_bonus: 20.0
+  collision_penalty: 2.0
+  oob_penalty: 3.0
+  evader_boundary_gain: 0.8
+
+# Training schedule / misc
+seed: 1111
+num_epochs: 10000
+rollout_steps: 256
+log_interval: 1
+eval_episodes: 20
+

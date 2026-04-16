@@ -1,0 +1,9 @@
+# toy_uav env config
+
+env_id: toy_uav
+num_agents: 2
+episode_limit: 100
+world_size: 2.0
+step_size: 0.1
+goal_reach_dist: 0.1
+# 由环境固定: obs_dim=6, action_dim=5 (Discrete(5))

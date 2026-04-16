@@ -1,0 +1,18 @@
+# MAPPO on ToyUavEnv experiment config
+#
+#  - Env:   ToyUavEnv (discrete multi-agent UAV toy env)
+#  - Algo:  MAPPO (centralized critic PPO)
+#  - Model: CentralizedCriticPolicy (actor obs, critic state)
+
+env: configs/env/toy_uav.yaml
+algo: configs/algo/mappo.yaml
+model: configs/model/centralized_critic.yaml
+
+# training schedule / misc
+seed: 42
+num_workers: 1
+total_timesteps: 1e6
+log_interval: 10
+save_interval: 0
+eval_interval: 10000
+

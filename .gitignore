@@ -1,0 +1,22 @@
+# experiment outputs
+results/
+save_result/
+logs/
+outputs/
+runs/
+wandb/
+
+# tensorboard
+**/tb_/
+events.out.tfevents.*
+*.tfevents.*
+
+# checkpoints / model artifacts
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# caches
+**/episode_log_cache/

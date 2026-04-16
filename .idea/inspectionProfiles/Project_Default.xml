@@ -1,0 +1,40 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="gym" />
+          <option value="torch" />
+          <option value="omegaconf" />
+          <option value="termcolor" />
+          <option value="jinja2" />
+          <option value="hydra-core" />
+          <option value="rl-games" />
+          <option value="pyvirtualdisplay" />
+          <option value="urdfpy" />
+          <option value="pysdf" />
+          <option value="warp-lang" />
+          <option value="trimesh" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="scipy-stubs==1.16.2.0" />
+          <option value="pandas-stubs==2.3.2.250926" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="基于最大熵多智能体深度强化学习的协同对抗算法.masac.scripts.run_experiment_from_doodad.*" />
+          <option value="missiles" />
+          <option value="dict.__add__" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

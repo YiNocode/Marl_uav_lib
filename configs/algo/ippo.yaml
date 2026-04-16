@@ -1,0 +1,11 @@
+algo: ippo
+action_space: continuous  # 改成 continuous
+
+gamma: 0.99
+gae_lambda: 0.95
+clip_ratio: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+# 连续动作可选：
+log_std_init: -0.5

@@ -1,0 +1,30 @@
+# SC-MAPPO：与 MAPPO 相同，额外用「pursuer 指向 evader 的方向两两相似度」调整 advantage
+# 策略网络仍使用 centralized_critic（CentralizedCriticPolicy），与 mappo 共用 model 配置即可。
+
+algo: sc_mappo
+
+action_space: continuous
+
+gamma: 0.99
+gae_lambda: 0.95
+
+clip_ratio: 0.2
+
+value_coef: 0.5
+entropy_coef: 0.001
+
+lr: 3e-4
+epochs: 4
+minibatch_size: 256
+max_grad_norm: 0.5
+
+use_centralized_critic: true
+
+# --- SC-MAPPO 专用：分散度惩罚强度（作用在中心化后的 advantage 上）
+dispersion_coef: 0.05
+
+# 从全局 state 末尾读取 P*D 维相对位移（PursuitEvasion3v1Task 与之一致）
+num_pursuers: 3
+spatial_dim: 3
+rels_from_end: true
+# rels_start_idx: 0   # 若 rels_from_end 为 false 则必填

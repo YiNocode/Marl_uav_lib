@@ -1,0 +1,20 @@
+# Dream-MAPPO：与 MAPPO 相同 PPO / 中心化 critic 训练流程，仅策略结构不同（见 dream_mappo_policy）
+
+algo: dream_mappo
+
+action_space: continuous
+
+gamma: 0.99
+gae_lambda: 0.95
+
+clip_ratio: 0.2
+
+value_coef: 0.5
+entropy_coef: 0.001
+
+lr: 3e-4
+epochs: 4
+minibatch_size: 256
+max_grad_norm: 0.5
+
+use_centralized_critic: true
