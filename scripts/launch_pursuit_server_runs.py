@@ -67,6 +67,21 @@ def _base_env_cfg() -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _structure_reward_defaults() -> dict[str, Any]:
+    return {
+        "structure_reward_scale": 2.0,
+        "structure_improve_scale": 1.0,
+        "structure_hold_reward_scale": 0.5,
+        "structure_cov_weight": 1.0,
+        "structure_col_weight": 1.2,
+        "structure_ang_weight": 1.0,
+        "structure_cov_threshold": 0.75,
+        "structure_col_threshold": 0.35,
+        "structure_ang_threshold": 0.75,
+        "structure_hold_steps_cap": 30,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch 3v1 pursuit-evasion training experiments.")
     parser.add_argument(
@@ -174,6 +189,7 @@ def build_role_assignment_runs(args: argparse.Namespace) -> list[tuple[str, dict
         cfg = _base_train_cfg()
         cfg["seed"] = int(seed)
         cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
+        cfg["task"].update(_structure_reward_defaults())
         run_name = f"pursuit_role_assignment_seed{seed}"
         runs.append((run_name, cfg, None, None))
     return runs
@@ -185,6 +201,7 @@ def build_obstacle_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, A
         cfg = _base_train_cfg()
         cfg["seed"] = int(seed)
         cfg["task"]["name"] = "pursuit_evasion_3v1_ex2"
+        cfg["task"].update(_structure_reward_defaults())
         cfg["task"]["num_obstacles_min"] = 5
         cfg["task"]["num_obstacles_max"] = 10
         cfg["task"]["obstacle_collision_penalty"] = 15.0
