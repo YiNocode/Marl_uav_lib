@@ -10,7 +10,7 @@ model: configs/model/centralized_critic.yaml
 
 # task.name: pursuit_evasion_3v1（原版）或 pursuit_evasion_3v1_ex1（结构感知 obs +16）
 task:
-  name: pursuit_evasion_3v1
+  name: pursuit_evasion_3v1_ex1
   world_xy: 20.0
   z_min: 0.5
   z_max: 5.0
@@ -34,6 +34,17 @@ task:
 
 
 # Training schedule / misc
+  structure_reward_scale: 2.0
+  structure_improve_scale: 1.0
+  structure_hold_reward_scale: 0.5
+  structure_cov_weight: 1.0
+  structure_col_weight: 1.2
+  structure_ang_weight: 1.0
+  structure_cov_threshold: 0.75
+  structure_col_threshold: 0.35
+  structure_ang_threshold: 0.75
+  structure_hold_steps_cap: 30
+
 seed: 100
 num_epochs: 30000
 rollout_steps: 2048

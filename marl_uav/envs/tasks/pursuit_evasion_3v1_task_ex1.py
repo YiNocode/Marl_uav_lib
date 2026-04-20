@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -18,17 +18,21 @@ def mod_2pi(angle: float) -> float:
     return angle % (2.0 * np.pi)
 
 
-def build_structure_aware_state_16d(
+def build_structure_aware_state_19d(
     pursuer_pos: np.ndarray,  # [3, 3], each row = [x, y, z]
     pursuer_vel: np.ndarray,  # [3, 3]
     evader_pos: np.ndarray,  # [3]
     evader_vel: np.ndarray,  # [3]
     env_xy_scale: float,
     vel_scale: float,
+    prev_structure_metrics: np.ndarray | None = None,
     eps: float = 1e-6,
 ) -> np.ndarray:
     """
-    Returns struct_obs of shape [3, 16]: structure-aware features per pursuer row
+    Returns struct_obs of shape [3, 19]: structure-aware features per pursuer row.
+
+    The last 3 dims are structure deltas relative to the previous step:
+    [delta_C_cov, delta_C_col, delta_D_ang].
     (row k matches pursuer_pos[k] / pursuer_vel[k]).
     """
     num_pursuers = 3
@@ -77,7 +81,20 @@ def build_structure_aware_state_16d(
     env_s = max(float(env_xy_scale), eps)
     vel_s = max(float(vel_scale), eps)
 
-    struct_obs = np.zeros((num_pursuers, 16), dtype=np.float32)
+    metrics = compute_pursuit_structure_metrics_3v1(p, e, eps=eps)
+    curr_struct = np.array(
+        [metrics["C_cov"], metrics["C_col"], metrics["D_ang"]],
+        dtype=np.float32,
+    )
+    prev_struct = np.asarray(
+        curr_struct if prev_structure_metrics is None else prev_structure_metrics,
+        dtype=np.float32,
+    ).reshape(-1)
+    if prev_struct.shape[0] != 3:
+        prev_struct = curr_struct.copy()
+    struct_delta = np.clip(curr_struct - prev_struct, -1.0, 1.0).astype(np.float32)
+
+    struct_obs = np.zeros((num_pursuers, 19), dtype=np.float32)
 
     for i in range(num_pursuers):
         i_pred = int(pred[i])
@@ -121,6 +138,9 @@ def build_structure_aware_state_16d(
                 d_mean_n,
                 np.sin(delta_theta_gap),
                 np.cos(delta_theta_gap),
+                struct_delta[0],
+                struct_delta[1],
+                struct_delta[2],
             ],
             dtype=np.float32,
         )
@@ -201,6 +221,10 @@ class PursuitEvasion3v1TaskState:
     captured: bool  # episode 内是否已捕获
     capture_agent: int  # 捕获者 id, 未捕获为 -1
     prev_pursuer_dists: np.ndarray  # [P] 上一步各 pursuer 到 evader 的距离
+    prev_structure_metrics: np.ndarray = field(
+        default_factory=lambda: np.zeros((3,), dtype=np.float32)
+    )  # [C_cov, C_col, D_ang]
+    structure_hold_steps: int = 0  # 连续满足结构阈值的步数
 
 
 class PursuitEvasion3v1Task(BaseTask):
@@ -266,6 +290,16 @@ class PursuitEvasion3v1Task(BaseTask):
         progress_dist_norm: float = 2.0,
         capture_bonus_team: float = 30.0,
         capture_bonus_individual: float = 10.0,
+        structure_reward_scale: float = 2.0,
+        structure_improve_scale: float = 1.0,
+        structure_hold_reward_scale: float = 0.5,
+        structure_cov_weight: float = 1.0,
+        structure_col_weight: float = 1.0,
+        structure_ang_weight: float = 1.0,
+        structure_cov_threshold: float = 0.75,
+        structure_col_threshold: float = 0.35,
+        structure_ang_threshold: float = 0.75,
+        structure_hold_steps_cap: int = 30,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -345,6 +379,16 @@ class PursuitEvasion3v1Task(BaseTask):
         self.progress_dist_norm = float(progress_dist_norm)
         self.capture_bonus_team = float(capture_bonus_team)
         self.capture_bonus_individual = float(capture_bonus_individual)
+        self.structure_reward_scale = float(structure_reward_scale)
+        self.structure_improve_scale = float(structure_improve_scale)
+        self.structure_hold_reward_scale = float(structure_hold_reward_scale)
+        self.structure_cov_weight = max(float(structure_cov_weight), 0.0)
+        self.structure_col_weight = max(float(structure_col_weight), 0.0)
+        self.structure_ang_weight = max(float(structure_ang_weight), 0.0)
+        self.structure_cov_threshold = float(np.clip(structure_cov_threshold, 0.0, 1.0))
+        self.structure_col_threshold = float(np.clip(structure_col_threshold, 0.0, 1.0))
+        self.structure_ang_threshold = float(np.clip(structure_ang_threshold, 0.0, 1.0))
+        self.structure_hold_steps_cap = max(int(structure_hold_steps_cap), 1)
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -423,12 +467,22 @@ class PursuitEvasion3v1Task(BaseTask):
                 "evader_speed_xy=", self.evader_speed_xy, self.evader_speed_z,
             )
 
+        init_struct = compute_pursuit_structure_metrics_3v1(start_pos[pursuer_ids], start_pos[evader_id])
         task_state = PursuitEvasion3v1TaskState(
             pursuer_ids=pursuer_ids,
             evader_id=evader_id,
             captured=bool(np.any(init_dists <= self.capture_dist)),
             capture_agent=int(pursuer_ids[np.argmin(init_dists)]) if np.any(init_dists <= self.capture_dist) else -1,
             prev_pursuer_dists=init_dists.astype(np.float32).copy(),
+            prev_structure_metrics=np.array(
+                [
+                    init_struct["C_cov"],
+                    init_struct["C_col"],
+                    init_struct["D_ang"],
+                ],
+                dtype=np.float32,
+            ),
+            structure_hold_steps=1 if self._structure_hold_satisfied(init_struct) else 0,
         )
         return start_pos, start_orn, task_state
 
@@ -484,12 +538,13 @@ class PursuitEvasion3v1Task(BaseTask):
     # ---------------------------------------------------------------------
     # observation / state
     # ---------------------------------------------------------------------
-    def _structure_aware_features_16d(
+    def _structure_aware_features_19d(
         self,
         lin_pos: np.ndarray,
         lin_vel: np.ndarray,
         pursuer_ids: np.ndarray,
         evader_id: int,
+        task_state: PursuitEvasion3v1TaskState,
     ) -> np.ndarray:
         """与 build_obs 行顺序一致：第 k 行对应 pursuer_ids[k]。"""
         pp = lin_pos[pursuer_ids]
@@ -497,13 +552,14 @@ class PursuitEvasion3v1Task(BaseTask):
         ep = lin_pos[evader_id]
         ev = lin_vel[evader_id]
         vel_scale = max(self.pursuer_speed_xy + self.evader_speed_xy, 1e-6)
-        return build_structure_aware_state_16d(
+        return build_structure_aware_state_19d(
             pp,
             pv,
             ep,
             ev,
             env_xy_scale=float(self.pos_xy_norm),
             vel_scale=float(vel_scale),
+            prev_structure_metrics=getattr(task_state, "prev_structure_metrics", None),
         )
 
     def build_obs(self, backend_state, task_state: PursuitEvasion3v1TaskState) -> np.ndarray:
@@ -514,7 +570,7 @@ class PursuitEvasion3v1Task(BaseTask):
             rel_evader_pos(3), rel_evader_vel(3),
             rel_teammate1_pos(3), rel_teammate1_vel(3),
             rel_teammate2_pos(3), rel_teammate2_vel(3),
-            structure_aware(16),  # 逃逸者中心方位、邻接扇区、最大缺口方向等
+            structure_aware(19),  # 原 16 维几何结构 + 3 维结构变化量
         ]
 
         全部做归一化：
@@ -536,7 +592,9 @@ class PursuitEvasion3v1Task(BaseTask):
         evader_pos = lin_pos[evader_id]
         evader_vel = lin_vel[evader_id]
 
-        struct16 = self._structure_aware_features_16d(lin_pos, lin_vel, pursuer_ids, evader_id)
+        struct19 = self._structure_aware_features_19d(
+            lin_pos, lin_vel, pursuer_ids, evader_id, task_state
+        )
 
         obs_list = []
         for row, i in enumerate(pursuer_ids):
@@ -554,7 +612,7 @@ class PursuitEvasion3v1Task(BaseTask):
                     self._normalize_velocity(lin_vel[j1] - lin_vel[i]),
                     self._normalize_delta(lin_pos[j2] - lin_pos[i]),
                     self._normalize_velocity(lin_vel[j2] - lin_vel[i]),
-                    struct16[row],
+                    struct19[row],
                 ],
                 axis=0,
             ).astype(np.float32)
@@ -592,6 +650,43 @@ class PursuitEvasion3v1Task(BaseTask):
         ).astype(np.float32)
         return state
 
+    def _structure_score_from_metrics(self, metrics: dict[str, Any]) -> float:
+        cov = float(np.clip(metrics.get("C_cov", 0.0), 0.0, 1.0))
+        col = float(np.clip(metrics.get("C_col", 1.0), 0.0, 1.0))
+        ang = float(np.clip(metrics.get("D_ang", 0.0), 0.0, 1.0))
+        w_cov = self.structure_cov_weight
+        w_col = self.structure_col_weight
+        w_ang = self.structure_ang_weight
+        w_sum = max(w_cov + w_col + w_ang, 1e-6)
+        score = (
+            w_cov * cov
+            + w_col * (1.0 - col)
+            + w_ang * ang
+        ) / w_sum
+        return float(np.clip(score, 0.0, 1.0))
+
+    def _structure_score_from_array(self, metrics_arr: np.ndarray) -> float:
+        arr = np.asarray(metrics_arr, dtype=np.float32).reshape(-1)
+        if arr.shape[0] < 3:
+            return 0.0
+        return self._structure_score_from_metrics(
+            {
+                "C_cov": float(arr[0]),
+                "C_col": float(arr[1]),
+                "D_ang": float(arr[2]),
+            }
+        )
+
+    def _structure_hold_satisfied(self, metrics: dict[str, Any]) -> bool:
+        cov = float(np.clip(metrics.get("C_cov", 0.0), 0.0, 1.0))
+        col = float(np.clip(metrics.get("C_col", 1.0), 0.0, 1.0))
+        ang = float(np.clip(metrics.get("D_ang", 0.0), 0.0, 1.0))
+        return bool(
+            cov >= self.structure_cov_threshold
+            and col <= self.structure_col_threshold
+            and ang >= self.structure_ang_threshold
+        )
+
     # ---------------------------------------------------------------------
     # reward / termination
     # ---------------------------------------------------------------------
@@ -608,9 +703,11 @@ class PursuitEvasion3v1Task(BaseTask):
         1) per-agent progress: 各自距离缩短
         2) mean progress: 团队平均距离缩短
         3) min progress: 最近 pursuer 的关键逼近
-        4) time penalty
-        5) capture team bonus + capturer extra bonus
-        6) collision / oob penalty
+        4) structure reward: 当前结构质量 + 相对上一时刻改善
+        5) structure hold reward: 连续保持包围结构
+        6) time penalty
+        7) capture team bonus + capturer extra bonus
+        8) collision / oob penalty
         """
         lin_pos = backend_state.states[:, 3, :]
         pursuer_ids = task_state.pursuer_ids
@@ -646,6 +743,34 @@ class PursuitEvasion3v1Task(BaseTask):
         rewards = progress_reward_scale * per_progress
         rewards += mean_progress_reward_scale * np.float32(mean_progress)
         rewards += min_progress_reward_scale * np.float32(min_progress)
+
+        struct_metrics = compute_pursuit_structure_metrics_3v1(pursuer_pos, evader_pos)
+        struct_arr = np.array(
+            [
+                struct_metrics["C_cov"],
+                struct_metrics["C_col"],
+                struct_metrics["D_ang"],
+            ],
+            dtype=np.float32,
+        )
+        prev_struct_arr = np.asarray(
+            getattr(task_state, "prev_structure_metrics", struct_arr),
+            dtype=np.float32,
+        ).reshape(-1)
+        if prev_struct_arr.shape[0] != 3:
+            prev_struct_arr = struct_arr.copy()
+
+        struct_score = self._structure_score_from_metrics(struct_metrics)
+        prev_struct_score = self._structure_score_from_array(prev_struct_arr)
+        struct_improve = float(np.clip(struct_score - prev_struct_score, -1.0, 1.0))
+
+        hold_ok = self._structure_hold_satisfied(struct_metrics)
+        hold_steps = (int(getattr(task_state, "structure_hold_steps", 0)) + 1) if hold_ok else 0
+        hold_ratio = float(np.clip(hold_steps / self.structure_hold_steps_cap, 0.0, 1.0))
+
+        rewards += np.float32(self.structure_reward_scale * struct_score)
+        rewards += np.float32(self.structure_improve_scale * struct_improve)
+        rewards += np.float32(self.structure_hold_reward_scale * hold_ratio)
         rewards -= np.float32(time_penalty)
 
         newly_captured = (min_dist <= self.capture_dist) and (not task_state.captured)
@@ -657,10 +782,12 @@ class PursuitEvasion3v1Task(BaseTask):
             capture_bonus_team = float(getattr(self, "capture_bonus_team", 30.0))
             capture_bonus_individual = float(getattr(self, "capture_bonus_individual", 10.0))
 
-            rewards = np.full((p,), np.float32(capture_bonus_team), dtype=np.float32)
+            rewards += np.full((p,), np.float32(capture_bonus_team), dtype=np.float32)
             rewards[capturer_idx] += np.float32(capture_bonus_individual)
 
             task_state.prev_pursuer_dists = dists.copy()
+            task_state.prev_structure_metrics = struct_arr.copy()
+            task_state.structure_hold_steps = int(hold_steps)
             return rewards.astype(np.float32)
 
         p_oob_mask = self._get_oob_mask(pursuer_pos)
@@ -681,10 +808,18 @@ class PursuitEvasion3v1Task(BaseTask):
                 "per_progress=", per_progress,
                 "mean_progress=", mean_progress,
                 "min_progress=", min_progress,
+                "C_cov=", struct_metrics["C_cov"],
+                "C_col=", struct_metrics["C_col"],
+                "D_ang=", struct_metrics["D_ang"],
+                "struct_score=", struct_score,
+                "struct_improve=", struct_improve,
+                "hold_steps=", hold_steps,
                 "rewards=", rewards,
             )
 
         task_state.prev_pursuer_dists = dists.copy()
+        task_state.prev_structure_metrics = struct_arr.copy()
+        task_state.structure_hold_steps = int(hold_steps)
         return rewards.astype(np.float32)
 
     def compute_terminated_truncated(

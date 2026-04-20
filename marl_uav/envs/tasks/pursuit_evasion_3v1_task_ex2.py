@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -14,8 +14,12 @@ from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
 class PursuitEvasion3v1TaskEx2State(PursuitEvasion3v1TaskState):
     """ex1 状态 + 本回合随机生成的圆柱障碍物（竖直轴平行 z，贯穿飞行高度带）。"""
 
-    obstacle_xy: np.ndarray  # [K, 2]
-    obstacle_r: np.ndarray  # [K]
+    obstacle_xy: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 2), dtype=np.float32)
+    )  # [K, 2]
+    obstacle_r: np.ndarray = field(
+        default_factory=lambda: np.zeros((0,), dtype=np.float32)
+    )  # [K]
 
 
 class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
