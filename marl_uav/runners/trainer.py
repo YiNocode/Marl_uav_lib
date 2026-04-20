@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict
 
 import numpy as np
@@ -159,7 +160,9 @@ class Trainer(BaseRunner):
 
             # 收集至少 rollout_steps 个时间步
             while steps_collected < rollout_steps:
+                t0 = time.time()
                 buf, info = self.rollout_worker.collect_episode(seed=env_step_seed)
+                t1 = time.time()
                 env_step_seed += 1
 
                 episode = buf.get_episode()
@@ -171,6 +174,7 @@ class Trainer(BaseRunner):
 
                 batch = self._postprocess_episode(episode)
                 loss_dict = self._call_learner(batch)
+                t2 = time.time()
                 epoch_losses.append(loss_dict)
 
                 # on-policy: 一条 episode 用完后即丢弃 / 清空 buffer
@@ -236,6 +240,9 @@ class Trainer(BaseRunner):
                         global_step=total_env_steps,
                         metrics=metrics_for_ckpt,
                     )
+                t3 = time.time()
+                print(f"rollout={t1 - t0:.2f}s update={t2 - t1:.2f}s log={t3 - t2:.2f}s")
+
 
         # 汇总整体指标
         global_metrics: Dict[str, Any] = {
