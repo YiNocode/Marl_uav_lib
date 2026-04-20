@@ -2,11 +2,11 @@ env: configs/generated/env/pyflyt_3v1_speed_ratio_1to3_seed103.yaml
 algo: configs/algo/dream_mappo.yaml
 model: configs/model/dream_mappo_centralized.yaml
 task:
-  name: pursuit_evasion_3v1
+  name: pursuit_evasion_3v1_ex1
   world_xy: 20.0
   z_min: 0.5
   z_max: 5.0
-  capture_dist: 1.0
+  capture_dist: 1
   episode_limit: 1000
   pursuer_speed: 0.18
   evader_speed: 0.06
@@ -22,6 +22,16 @@ task:
   capture_bonus_team: 30.0
   capture_bonus_individual: 10.0
   progress_dist_norm: 2.0
+  structure_reward_scale: 2.0
+  structure_improve_scale: 1.0
+  structure_hold_reward_scale: 0.5
+  structure_cov_weight: 1.0
+  structure_col_weight: 1.2
+  structure_ang_weight: 1.0
+  structure_cov_threshold: 0.75
+  structure_col_threshold: 0.35
+  structure_ang_threshold: 0.75
+  structure_hold_steps_cap: 30
 seed: 103
 num_epochs: 30000
 rollout_steps: 2048

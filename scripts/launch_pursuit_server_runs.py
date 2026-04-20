@@ -27,59 +27,22 @@ GENERATED_DIR = ROOT / "configs" / "generated"
 GENERATED_ENV_DIR = GENERATED_DIR / "env"
 
 
-def _base_train_cfg() -> dict[str, Any]:
-    return {
-        "env": "configs/env/pyflyt_3v1.yaml",
-        "algo": "configs/algo/mappo.yaml",
-        "model": "configs/model/centralized_critic.yaml",
-        "task": {
-            "name": "pursuit_evasion_3v1",
-            "world_xy": 20.0,
-            "z_min": 0.5,
-            "z_max": 5.0,
-            "capture_dist": 1.0,
-            "episode_limit": 1000,
-            "pursuer_speed": 0.20,
-            "evader_speed": 0.06,
-            "min_pursuer_sep": 0.6,
-            "progress_reward_scale": 2.0,
-            "min_progress_reward_scale": 1.0,
-            "time_penalty": 0.001,
-            "capture_bonus": 200.0,
-            "collision_penalty": 2.0,
-            "oob_penalty": 30.0,
-            "evader_boundary_gain": 0.8,
-            "mean_progress_reward_scale": 2.0,
-            "capture_bonus_team": 30.0,
-            "capture_bonus_individual": 10.0,
-            "progress_dist_norm": 2.0,
-        },
-        "seed": 100,
-        "num_epochs": 30000,
-        "rollout_steps": 2048,
-        "log_interval": 1,
-        "eval_episodes": 20,
-    }
+def _load_yaml(rel_path: str) -> dict[str, Any]:
+    with open(ROOT / rel_path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _dream_ex1_train_cfg() -> dict[str, Any]:
+    return _load_yaml("configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml")
+
+
+def _mappo_ex2_train_cfg() -> dict[str, Any]:
+    return _load_yaml("configs/experiment/pursuit_evasion_mappo_3v1_ex2.yaml")
 
 
 def _base_env_cfg() -> dict[str, Any]:
     with open(ROOT / "configs" / "env" / "pyflyt_3v1.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _structure_reward_defaults() -> dict[str, Any]:
-    return {
-        "structure_reward_scale": 2.0,
-        "structure_improve_scale": 1.0,
-        "structure_hold_reward_scale": 0.5,
-        "structure_cov_weight": 1.0,
-        "structure_col_weight": 1.2,
-        "structure_ang_weight": 1.0,
-        "structure_cov_threshold": 0.75,
-        "structure_col_threshold": 0.35,
-        "structure_ang_threshold": 0.75,
-        "structure_hold_steps_cap": 30,
-    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,7 +57,7 @@ def parse_args() -> argparse.Namespace:
         "--seeds",
         type=int,
         nargs="+",
-        default=[101, 102, 103],
+        default=[101],
         help="Seeds to run for the selected experiment.",
     )
     parser.add_argument(
@@ -167,10 +130,10 @@ def build_speed_ratio_runs(args: argparse.Namespace) -> list[tuple[str, dict[str
         pursuer_speed, evader_speed = speed_pair_for_ratio(args, ratio_text)
         ratio_tag = ratio_text.replace(":", "to")
         for seed in args.seeds:
-            cfg = _base_train_cfg()
+            cfg = _dream_ex1_train_cfg()
             env_cfg = _base_env_cfg()
             cfg["seed"] = int(seed)
-            cfg["task"]["name"] = "pursuit_evasion_3v1"
+            cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
             # Continuous control under PyFlyt 3v1 uses env.action_low/high as the true
             # pursuer velocity bounds. Keep task speed in sync for normalization only.
             cfg["task"]["pursuer_speed"] = float(pursuer_speed)
@@ -186,10 +149,9 @@ def build_speed_ratio_runs(args: argparse.Namespace) -> list[tuple[str, dict[str
 def build_role_assignment_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
     runs: list[tuple[str, dict[str, Any]]] = []
     for seed in args.seeds:
-        cfg = _base_train_cfg()
+        cfg = _dream_ex1_train_cfg()
         cfg["seed"] = int(seed)
         cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
-        cfg["task"].update(_structure_reward_defaults())
         run_name = f"pursuit_role_assignment_seed{seed}"
         runs.append((run_name, cfg, None, None))
     return runs
@@ -198,10 +160,9 @@ def build_role_assignment_runs(args: argparse.Namespace) -> list[tuple[str, dict
 def build_obstacle_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
     runs: list[tuple[str, dict[str, Any]]] = []
     for seed in args.seeds:
-        cfg = _base_train_cfg()
+        cfg = _mappo_ex2_train_cfg()
         cfg["seed"] = int(seed)
         cfg["task"]["name"] = "pursuit_evasion_3v1_ex2"
-        cfg["task"].update(_structure_reward_defaults())
         cfg["task"]["num_obstacles_min"] = 5
         cfg["task"]["num_obstacles_max"] = 10
         cfg["task"]["obstacle_collision_penalty"] = 15.0
