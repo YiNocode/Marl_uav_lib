@@ -141,7 +141,7 @@ class PursuitEvasion3v1Task(BaseTask):
         reference_world_xy: float = 2.0,
         max_pursuers_oob_before_terminate: int = 1,
         max_init_resample: int = 200,
-        debug: bool = True,
+        debug: bool = False,
         mean_progress_reward_scale: float = 2.0,
         progress_dist_norm: float = 2.0,
         capture_bonus_team: float = 30.0,
