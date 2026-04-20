@@ -28,7 +28,6 @@ __pycache__/
 # virtual env
 .venv/
 venv/
-env/
 
 # common artifacts
 .ipynb_checkpoints/

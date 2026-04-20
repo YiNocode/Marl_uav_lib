@@ -1,0 +1,27 @@
+# PyFlyt 3v1 追逃环境配置（具体任务类由实验 YAML 的 task.name 选择：
+# pursuit_evasion_3v1 / pursuit_evasion_3v1_ex1 / pursuit_evasion_3v1_ex2）
+# action_space: discrete | continuous
+# - discrete: 7 个离散动作（hover, ±x, ±y, ±z 等）
+# - continuous: 每智能体 action_dim 维，与 task.action_to_setpoint 原样下发到仿真一致（无额外缩放）。
+#   MAPPO/PPO 要求 buffer 中动作与执行动作同语义，故 pursuer_speed 等物理量级应通过本文件的
+#   action_low / action_high（与 gymnasium Box、Gaussian 头）设定，而不是在 task 里二次缩放。
+#   省略 action_low/high 时默认为全维 [-1, 1]。
+
+env_id: pyflyt_navigation
+action_space: continuous  # 可选: discrete | continuous
+action_dim: 4
+# 与 4 维连续控制对应：[vx, vy, yaw_rate, vz] 归一化下界/上界（可按任务调整）
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
+
+backend:
+  num_agents: 4
+  drone_type: quadx
+  render: False
+  physics_hz: 240
+  control_hz: 60
+  world_scale: 5.0
+  flight_mode: 6
+  seed_offset: 0
+  drone_options: {}
+

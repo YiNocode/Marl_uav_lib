@@ -1,0 +1,15 @@
+# PyFlyt NavigationTask environment config
+
+env_id: pyflyt_navigation
+
+backend:
+  num_agents: 1
+  drone_type: quadx
+  render: false
+  physics_hz: 240
+  control_hz: 60
+  world_scale: 5.0
+  flight_mode: 6
+  seed_offset: 0
+  drone_options: {}
+
