@@ -1,7 +1,0 @@
-# px4 1v1 env config
-
-env_id: px4_1v1
-num_agents: 2
-obs_dim: null
-action_dim: null
-episode_limit: 500

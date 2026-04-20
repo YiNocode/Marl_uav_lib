@@ -20,3 +20,15 @@ checkpoints/
 
 # caches
 **/episode_log_cache/
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual env
+.venv/
+venv/
+env/
+
+# common artifacts
+.ipynb_checkpoints/
