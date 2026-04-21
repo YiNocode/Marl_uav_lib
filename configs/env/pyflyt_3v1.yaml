@@ -19,7 +19,7 @@ backend:
   drone_type: quadx
   render: False
   physics_hz: 240
-  control_hz: 120
+  control_hz: 60
   world_scale: 5.0
   flight_mode: 6
   seed_offset: 0

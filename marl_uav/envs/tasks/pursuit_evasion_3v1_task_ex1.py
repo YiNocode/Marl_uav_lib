@@ -303,6 +303,7 @@ class PursuitEvasion3v1Task(BaseTask):
         structure_gate_near_dist_ratio: float = 3.0,
         structure_gate_far_dist_ratio: float = 6.0,
         progress_gate_min_scale: float = 0.35,
+        structure_obs_include_deltas: bool = True,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -398,6 +399,7 @@ class PursuitEvasion3v1Task(BaseTask):
             self.structure_gate_near_dist_ratio + 1e-6,
         )
         self.progress_gate_min_scale = float(np.clip(progress_gate_min_scale, 0.0, 1.0))
+        self.structure_obs_include_deltas = bool(structure_obs_include_deltas)
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -621,7 +623,11 @@ class PursuitEvasion3v1Task(BaseTask):
                     self._normalize_velocity(lin_vel[j1] - lin_vel[i]),
                     self._normalize_delta(lin_pos[j2] - lin_pos[i]),
                     self._normalize_velocity(lin_vel[j2] - lin_vel[i]),
-                    struct19[row],
+                    (
+                        struct19[row]
+                        if self.structure_obs_include_deltas
+                        else struct19[row, :16]
+                    ),
                 ],
                 axis=0,
             ).astype(np.float32)

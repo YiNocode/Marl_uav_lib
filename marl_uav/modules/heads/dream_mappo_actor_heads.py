@@ -19,21 +19,14 @@ def pursuit_state_slices(num_pursuers: int) -> tuple[int, int, int]:
     return p, evader_start, rels_start
 
 
-def geom_actions_from_pursuit_state(
+def manifold_targets_from_pursuit_state(
     state_b: torch.Tensor,
     rho: torch.Tensor,
     psi: torch.Tensor,
     *,
     num_pursuers: int,
-    a_max_geom: float,
-    sigma_p: float,
-    action_dim: int,
-) -> torch.Tensor:
-    """在归一化 xy 平面上构造圆形流形目标点，并输出几何动作 (仅前两维非零)。
-
-    state_b: (B, state_dim)，取 pursuer 与 evader 的归一化位置段。
-    rho, psi: (B,) 当前步包围半径与相位偏置（已由全局头产生）。
-    """
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build per-pursuer manifold targets in normalized state coordinates."""
     B = state_b.shape[0]
     n = int(num_pursuers)
     p3, evader_start, _ = pursuit_state_slices(n)
@@ -52,15 +45,41 @@ def geom_actions_from_pursuit_state(
     inv_rank.scatter_(1, order, k_idx)
 
     phi = (2.0 * math.pi / float(n)) * inv_rank.to(dtype=dtype)
-    psi_b = psi.unsqueeze(-1)
-    ang = phi + psi_b
-    c = torch.cos(ang)
-    s = torch.sin(ang)
-    r_star_xy = Exy.unsqueeze(1) + rho.reshape(B, 1, 1) * torch.stack([c, s], dim=-1)
-    e_xy = r_star_xy - Pxy
+    ang = phi + psi.unsqueeze(-1)
+    targets = torch.zeros(B, n, 3, device=device, dtype=dtype)
+    targets[:, :, 0] = Exy[:, 0:1] + rho.unsqueeze(-1) * torch.cos(ang)
+    targets[:, :, 1] = Exy[:, 1:2] + rho.unsqueeze(-1) * torch.sin(ang)
+    targets[:, :, 2] = E[:, 2:3]
+    weights = torch.ones(B, n, 1, device=device, dtype=dtype)
+    return targets, P, weights
+
+
+def geom_actions_from_pursuit_state(
+    state_b: torch.Tensor,
+    rho: torch.Tensor,
+    psi: torch.Tensor,
+    *,
+    num_pursuers: int,
+    a_max_geom: float,
+    sigma_p: float,
+    action_dim: int,
+) -> torch.Tensor:
+    """在归一化 xy 平面上构造圆形流形目标点，并输出几何动作 (仅前两维非零)。
+
+    state_b: (B, state_dim)，取 pursuer 与 evader 的归一化位置段。
+    rho, psi: (B,) 当前步包围半径与相位偏置（已由全局头产生）。
+    """
+    targets, P, _ = manifold_targets_from_pursuit_state(
+        state_b,
+        rho,
+        psi,
+        num_pursuers=num_pursuers,
+    )
+    e_xy = targets[:, :, :2] - P[:, :, :2]
     a_xy = float(a_max_geom) * torch.tanh(e_xy / float(sigma_p))
 
-    out = torch.zeros(B, n, int(action_dim), device=device, dtype=dtype)
+    B, n = P.shape[0], P.shape[1]
+    out = torch.zeros(B, n, int(action_dim), device=P.device, dtype=P.dtype)
     out[:, :, :2] = a_xy
     return out
 

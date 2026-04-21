@@ -11,6 +11,7 @@ from marl_uav.modules.encoders.mlp_encoder import MLPEncoder
 from marl_uav.modules.heads.dream_mappo_actor_heads import (
     DreamMappoActorHead,
     geom_actions_from_pursuit_state,
+    manifold_targets_from_pursuit_state,
     structure_uv_to_rho_psi,
 )
 from marl_uav.policies.base_policy import BasePolicy
@@ -65,12 +66,13 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
         self.rho_scale = float(rho_scale)
         self.rho_min = float(rho_min)
         self.psi_scale = float(psi_scale)
+        self.actor_condition_dim = 7
 
         self.actor_encoder: nn.Module = (
             actor_encoder
             if actor_encoder is not None
             else MLPEncoder(
-                input_dim=self.obs_dim,
+                input_dim=self.obs_dim + self.actor_condition_dim,
                 hidden_dims=encoder_hidden_dims,
                 output_dim=encoder_output_dim,
             )
@@ -147,6 +149,31 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
         )
         return a_geom, rho, psi
 
+    def _actor_condition_from_state(
+        self,
+        state_b: torch.Tensor,
+        rho: torch.Tensor,
+        psi: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Build per-agent manifold conditioning features for the actor."""
+        targets, pursuer_pos, weights = manifold_targets_from_pursuit_state(
+            state_b,
+            rho,
+            psi,
+            num_pursuers=self.num_pursuers,
+        )
+        rel_slot = targets - pursuer_pos
+        rel_norm = torch.linalg.norm(rel_slot, dim=-1, keepdim=True).clamp_min(1e-6)
+        slot_dir = rel_slot / rel_norm
+        actor_cond = torch.cat([rel_slot, slot_dir, weights], dim=-1)
+        return {
+            "actor_cond": actor_cond,
+            "slot_rel": rel_slot,
+            "slot_dir": slot_dir,
+            "slot_weight": weights,
+            "slot_target": targets,
+        }
+
     @property
     def device(self) -> torch.device:
         return next(self.parameters()).device
@@ -203,9 +230,11 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
         state_b = self._state_b(state_tensor)
 
         a_geom, rho, psi = self._geom_from_state(state_b)
+        cond = self._actor_condition_from_state(state_b, rho, psi)
 
-        flat_obs = obs_tensor.reshape(B * N, self.obs_dim)
-        actor_feat_flat = self.actor_encoder(flat_obs)
+        actor_input = torch.cat([obs_tensor, cond["actor_cond"]], dim=-1)
+        flat_actor_input = actor_input.reshape(B * N, self.obs_dim + self.actor_condition_dim)
+        actor_feat_flat = self.actor_encoder(flat_actor_input)
 
         actor_out_flat = self.dream_actor_head(
             actor_feat_flat,
@@ -229,6 +258,11 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
             "rho": rho,
             "psi": psi,
             "a_geom": a_geom,
+            "actor_cond": cond["actor_cond"],
+            "slot_rel": cond["slot_rel"],
+            "slot_dir": cond["slot_dir"],
+            "slot_weight": cond["slot_weight"],
+            "slot_target": cond["slot_target"],
         }
 
         flat_state = state_tensor.reshape(B * N, self.state_dim)
@@ -277,10 +311,12 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
         state_tensor = self._prepare_state(state, B=B, N=N)
         state_b = self._state_b(state_tensor)
 
-        a_geom, _, _ = self._geom_from_state(state_b)
+        a_geom, rho, psi = self._geom_from_state(state_b)
+        cond = self._actor_condition_from_state(state_b, rho, psi)
 
-        flat_obs = obs_tensor.reshape(B * N, self.obs_dim)
-        actor_feat_flat = self.actor_encoder(flat_obs)
+        actor_input = torch.cat([obs_tensor, cond["actor_cond"]], dim=-1)
+        flat_actor_input = actor_input.reshape(B * N, self.obs_dim + self.actor_condition_dim)
+        actor_feat_flat = self.actor_encoder(flat_actor_input)
         flat_actions = torch.as_tensor(
             actions, dtype=torch.float32, device=self.device
         ).reshape(B * N, self.action_dim)

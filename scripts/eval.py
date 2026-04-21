@@ -12,6 +12,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
+import torch
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -478,6 +479,34 @@ def _pursuit_series_from_trajectory(traj_xyz: np.ndarray) -> list[dict[str, Any]
     return out
 
 
+def _dream_manifold_targets_from_snapshot(
+    pursuer_xyz: np.ndarray,
+    evader_xyz: np.ndarray,
+    rho: float,
+    psi: float,
+) -> np.ndarray:
+    """Rebuild Dream-MAPPO manifold target points in the xy plane."""
+    pursuer_xyz = np.asarray(pursuer_xyz, dtype=np.float64)
+    evader_xyz = np.asarray(evader_xyz, dtype=np.float64).reshape(3)
+    n = int(pursuer_xyz.shape[0])
+    if n <= 0:
+        return np.zeros((0, 3), dtype=np.float64)
+
+    rel_xy = pursuer_xyz[:, :2] - evader_xyz[None, :2]
+    alpha = np.arctan2(rel_xy[:, 1], rel_xy[:, 0])
+    order = np.argsort(alpha)
+    inv_rank = np.zeros((n,), dtype=np.int64)
+    inv_rank[order] = np.arange(n, dtype=np.int64)
+
+    phi = (2.0 * np.pi / float(n)) * inv_rank.astype(np.float64)
+    ang = phi + float(psi)
+    targets = np.zeros((n, 3), dtype=np.float64)
+    targets[:, 0] = evader_xyz[0] + float(rho) * np.cos(ang)
+    targets[:, 1] = evader_xyz[1] + float(rho) * np.sin(ang)
+    targets[:, 2] = evader_xyz[2]
+    return targets
+
+
 def _plot_pursuit_polar_schematic(
     ax: Any,
     metrics: dict[str, Any],
@@ -587,6 +616,9 @@ def _plot_pursuit_evasion_trajectories_from_data(
         else:
             series = _pursuit_series_from_trajectory(traj_xyz)
 
+        manifold_raw = data.get("dream_manifold_series")
+        manifold_series = manifold_raw if isinstance(manifold_raw, list) else []
+
         if not series:
             metrics_sel: dict[str, Any] = {}
         else:
@@ -657,6 +689,46 @@ def _plot_pursuit_evasion_trajectories_from_data(
                     alpha=0.95,
                     label="obstacles (xy center)",
                 )
+
+        if len(manifold_series) == Tp1 and n_real >= 4:
+            manifold_last = manifold_series[-1]
+            rho = manifold_last.get("rho")
+            psi = manifold_last.get("psi")
+            if rho is not None and psi is not None:
+                evader_xyz = np.asarray(traj_xyz[-1, 3, :], dtype=np.float64)
+                pursuer_xyz = np.asarray(traj_xyz[-1, :3, :], dtype=np.float64)
+                th = np.linspace(0.0, 2.0 * np.pi, 181, dtype=np.float64)
+                circle_xyz = np.zeros((th.shape[0], 3), dtype=np.float64)
+                circle_xyz[:, 0] = evader_xyz[0] + float(rho) * np.cos(th)
+                circle_xyz[:, 1] = evader_xyz[1] + float(rho) * np.sin(th)
+                circle_xyz[:, 2] = evader_xyz[2]
+                ax3d.plot(
+                    circle_xyz[:, 0],
+                    circle_xyz[:, 1],
+                    circle_xyz[:, 2],
+                    "--",
+                    color="purple",
+                    lw=1.8,
+                    alpha=0.95,
+                    label="dream manifold",
+                )
+                manifold_targets = _dream_manifold_targets_from_snapshot(
+                    pursuer_xyz,
+                    evader_xyz,
+                    float(rho),
+                    float(psi),
+                )
+                if manifold_targets.shape[0] > 0:
+                    ax3d.scatter(
+                        manifold_targets[:, 0],
+                        manifold_targets[:, 1],
+                        manifold_targets[:, 2],
+                        c="purple",
+                        marker="x",
+                        s=70,
+                        linewidths=1.6,
+                        label="manifold targets",
+                    )
 
         ax3d.set_xlim(-20, 20)
         ax3d.set_ylim(-20, 20)
@@ -761,6 +833,8 @@ def run_multi_seed_eval(
                 }
                 if "pursuit_structure_series" in info:
                     ep_traj["pursuit_structure_series"] = info["pursuit_structure_series"]
+                if "dream_manifold_series" in info:
+                    ep_traj["dream_manifold_series"] = info["dream_manifold_series"]
                 if "obstacle_xy" in info and "obstacle_r" in info:
                     ep_traj["obstacle_xy"] = np.asarray(info["obstacle_xy"], dtype=np.float32).copy()
                     ep_traj["obstacle_r"] = np.asarray(info["obstacle_r"], dtype=np.float32).copy()
@@ -965,6 +1039,28 @@ def plot_pursuit_mean_cov_col_scatter(
     return True
 
 
+def _peek_checkpoint_actor_obs_dim(ckpt_path: Path) -> int | None:
+    """Read actor input dim from checkpoint without loading the full learner."""
+    try:
+        data = torch.load(ckpt_path, map_location="cpu")
+    except Exception:
+        return None
+    learner_state = data.get("learner")
+    if not isinstance(learner_state, dict):
+        return None
+    policy_state = learner_state.get("policy")
+    if not isinstance(policy_state, dict):
+        return None
+    weight = policy_state.get("actor_encoder.net.0.weight")
+    shape = getattr(weight, "shape", None)
+    if shape is None or len(shape) < 2:
+        return None
+    try:
+        return int(shape[1])
+    except Exception:
+        return None
+
+
 def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -976,6 +1072,18 @@ def main() -> None:
     model_cfg_path = root / exp_cfg.get("model", "configs/model/mlp.yaml")
     task_cfg: Dict[str, Any] = exp_cfg.get("task", {}) or {}
 
+    if args.ckpt:
+        ckpt_path = Path(args.ckpt)
+    else:
+        exp_name = Path(args.config).stem
+        ckpt_dir = root / "results" / exp_name / "checkpoints" / str(args.seed)
+        ckpt_path = ckpt_dir / "best.pt"
+
+    if not ckpt_path.exists():
+        raise FileNotFoundError(
+            f"Checkpoint not found: {ckpt_path}. 璇峰厛閫氳繃 train.py 璁粌骞朵繚瀛樻ā鍨嬨€?"
+        )
+
     # 构建环境 / 策略 / learner，并从 checkpoint 恢复参数
     env = build_env(env_cfg_path, seed=args.seed, task_cfg=task_cfg)
     # 若环境还未初始化 obs_dim/state_dim，则在构建 policy 前先 reset 一次
@@ -985,6 +1093,28 @@ def main() -> None:
         except TypeError:
             # 兼容不接受 seed 参数的 reset 签名
             env.reset()
+    task_name = str(task_cfg.get("name", "navigation"))
+    ckpt_obs_dim = _peek_checkpoint_actor_obs_dim(ckpt_path)
+    if (
+        ckpt_obs_dim is not None
+        and getattr(env, "obs_dim", None) is not None
+        and int(env.obs_dim) != int(ckpt_obs_dim)
+        and task_name in ("pursuit_evasion_3v1_ex1", "pursuit_evasion_3v1_ex2")
+        and int(env.obs_dim) - int(ckpt_obs_dim) == 3
+        and "structure_obs_include_deltas" not in task_cfg
+    ):
+        compat_task_cfg = dict(task_cfg)
+        compat_task_cfg["structure_obs_include_deltas"] = False
+        env = build_env(env_cfg_path, seed=args.seed, task_cfg=compat_task_cfg)
+        try:
+            env.reset(seed=args.seed)
+        except TypeError:
+            env.reset()
+        task_cfg = compat_task_cfg
+        print(
+            f"[Eval] Detected legacy checkpoint obs_dim={ckpt_obs_dim}; "
+            "rebuilding env with structure_obs_include_deltas=False for compatibility."
+        )
     policy_core = build_policy(model_cfg_path, env, algo_cfg_path)
     n_actions_for_mac = (
         env.n_actions

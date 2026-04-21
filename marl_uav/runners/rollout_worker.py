@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 import numpy as np
+import torch
 
 from marl_uav.buffers.episode_buffer import EpisodeBuffer
 from marl_uav.envs.base_env import BaseEnv
@@ -118,6 +119,35 @@ class RolloutWorker(BaseRunner):
 
         return actions_np, log_probs_np, values_np
 
+    def _maybe_extract_dream_manifold_snapshot(self, state: np.ndarray) -> dict[str, Any] | None:
+        """Return Dream-MAPPO manifold params for the current state if available."""
+        policy_obj = getattr(self.policy, "policy", self.policy)
+        if not (
+            hasattr(policy_obj, "_prepare_state")
+            and hasattr(policy_obj, "_state_b")
+            and hasattr(policy_obj, "_geom_from_state")
+        ):
+            return None
+
+        try:
+            n_agents = int(getattr(self.env, "num_agents"))
+        except (TypeError, ValueError):
+            return None
+
+        try:
+            with torch.no_grad():
+                state_tensor = policy_obj._prepare_state(state, B=1, N=n_agents)
+                state_b = policy_obj._state_b(state_tensor)
+                _, rho, psi = policy_obj._geom_from_state(state_b)
+        except Exception:
+            return None
+
+        rho_np = rho.detach().cpu().numpy().reshape(-1)
+        psi_np = psi.detach().cpu().numpy().reshape(-1)
+        if rho_np.size == 0 or psi_np.size == 0:
+            return None
+        return {"rho": float(rho_np[0]), "psi": float(psi_np[0])}
+
     def collect_episode(
         self,
         seed: int | None = None,
@@ -159,6 +189,7 @@ class RolloutWorker(BaseRunner):
         # 可选：记录轨迹（用于 3v1 追逃等任务的评估画图）
         traj_list: list[np.ndarray] = []
         pursuit_structure_series: List[Dict[str, Any]] = []
+        dream_manifold_series: List[Dict[str, Any]] = []
         # 3v1 围捕：按时间顺序记录 C_cov / C_col，episode 末对最后 PURSUIT_STRUCTURE_MEAN_LAST_STEPS 步取均值
         pursuit_cov_col_pairs: list[tuple[float, float]] = []
 
@@ -174,6 +205,9 @@ class RolloutWorker(BaseRunner):
                 )
                 if isinstance(ps0, dict):
                     pursuit_structure_series.append(ps0)
+                manifold0 = self._maybe_extract_dream_manifold_snapshot(state)
+                if manifold0 is not None:
+                    dream_manifold_series.append(manifold0)
 
         # 用于聚合环境诊断（若 env 的 step_info 提供）
         mean_goal_distances: list[float] = []
@@ -230,15 +264,18 @@ class RolloutWorker(BaseRunner):
                     (float(ps_step["C_cov"]), float(ps_step["C_col"]))
                 )
 
+            next_obs_list = next_obs_dict["obs"]
+            next_state = next_obs_dict["state"]
+
             if record_trajectory and getattr(self.env, "prev_backend_state", None) is not None:
                 traj_list.append(
                     np.asarray(self.env.prev_backend_state.states[:, 3, :], dtype=np.float32)
                 )
                 if isinstance(ps_step, dict):
                     pursuit_structure_series.append(ps_step)
-
-            next_obs_list = next_obs_dict["obs"]
-            next_state = next_obs_dict["state"]
+                manifold_step = self._maybe_extract_dream_manifold_snapshot(next_state)
+                if manifold_step is not None:
+                    dream_manifold_series.append(manifold_step)
             done = terminated or truncated
             episode_return += sum(rewards)
 
@@ -288,6 +325,8 @@ class RolloutWorker(BaseRunner):
             info["trajectory"] = np.stack(traj_list, axis=0)  # [T+1, N, 3]
         if pursuit_structure_series:
             info["pursuit_structure_series"] = pursuit_structure_series
+        if dream_manifold_series:
+            info["dream_manifold_series"] = dream_manifold_series
         if pursuit_cov_col_pairs:
             tail = pursuit_cov_col_pairs[-PURSUIT_STRUCTURE_MEAN_LAST_STEPS:]
             covs = np.array([p[0] for p in tail], dtype=np.float64)

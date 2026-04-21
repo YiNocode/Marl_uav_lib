@@ -85,6 +85,10 @@ class MAC(BaseAgent, nn.Module):
         if avail_actions is None or self.n_actions == 0:
             # 连续动作时 n_actions=0，不传 avail_actions
             return None
+        if isinstance(avail_actions, (list, tuple)) and len(avail_actions) > 0 and hasattr(
+            avail_actions[0], "shape"
+        ):
+            avail_actions = np.stack(avail_actions, axis=0)
         m = torch.as_tensor(
             avail_actions, dtype=torch.float32, device=self.policy.device
         )
