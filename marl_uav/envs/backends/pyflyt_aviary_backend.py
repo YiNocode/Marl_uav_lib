@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-import json
 
 import numpy as np
 from PyFlyt.core import Aviary
@@ -122,7 +121,8 @@ class PyFlytAviaryBackend:
             world_scale=self.world_scale,
             seed=self.seed,
         )
-        self.env.resetDebugVisualizerCamera(cameraDistance=5,
+        if self.render:
+            self.env.resetDebugVisualizerCamera(cameraDistance=5,
                                                cameraYaw=0,
                                                cameraPitch=-45,
                                                cameraTargetPosition=[0, 0, 5] )
@@ -159,26 +159,7 @@ class PyFlytAviaryBackend:
         if self.env is None:
             raise RuntimeError("Aviary 尚未初始化，请先调用 reset()。")
 
-        # region agent log: inspect time-related attributes for debug hypotheses
-        try:
-            log_entry = {
-                "sessionId": "cd6433",
-                "runId": "pre-fix",
-                "hypothesisId": "elapsed_attr",
-                "location": "pyflyt_aviary_backend.py:get_backend_state",
-                "message": "Inspect Aviary elapsed attributes",
-                "data": {
-                    "has_elapsed_time": hasattr(self.env, "elapsed_time"),
-                    "has_aviary_steps": hasattr(self.env, "aviary_steps"),
-                    "has_physics_steps": hasattr(self.env, "physics_steps"),
-                    "type": type(self.env).__name__,
-                },
-                "timestamp": int(__import__("time").time() * 1000),
-            }
-        except Exception:
-            # 调试日志失败时静默忽略，避免影响正常流程
-            pass
-        # endregion
+
 
         # all_states: list[np.ndarray]，每个元素形状为 (4, 3)
         all_states = np.asarray(self.env.all_states, dtype=np.float32)
