@@ -300,6 +300,9 @@ class PursuitEvasion3v1Task(BaseTask):
         structure_col_threshold: float = 0.35,
         structure_ang_threshold: float = 0.75,
         structure_hold_steps_cap: int = 30,
+        structure_gate_near_dist_ratio: float = 3.0,
+        structure_gate_far_dist_ratio: float = 6.0,
+        progress_gate_min_scale: float = 0.35,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -389,6 +392,12 @@ class PursuitEvasion3v1Task(BaseTask):
         self.structure_col_threshold = float(np.clip(structure_col_threshold, 0.0, 1.0))
         self.structure_ang_threshold = float(np.clip(structure_ang_threshold, 0.0, 1.0))
         self.structure_hold_steps_cap = max(int(structure_hold_steps_cap), 1)
+        self.structure_gate_near_dist_ratio = max(float(structure_gate_near_dist_ratio), 0.0)
+        self.structure_gate_far_dist_ratio = max(
+            float(structure_gate_far_dist_ratio),
+            self.structure_gate_near_dist_ratio + 1e-6,
+        )
+        self.progress_gate_min_scale = float(np.clip(progress_gate_min_scale, 0.0, 1.0))
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -687,6 +696,12 @@ class PursuitEvasion3v1Task(BaseTask):
             and ang >= self.structure_ang_threshold
         )
 
+    def _structure_reward_gate(self, min_dist: float) -> float:
+        near_dist = self.structure_gate_near_dist_ratio * self.capture_dist
+        far_dist = self.structure_gate_far_dist_ratio * self.capture_dist
+        gate_input = (far_dist - float(min_dist)) / max(far_dist - near_dist, 1e-6)
+        return float(self._smoothstep01(gate_input))
+
     # ---------------------------------------------------------------------
     # reward / termination
     # ---------------------------------------------------------------------
@@ -740,9 +755,13 @@ class PursuitEvasion3v1Task(BaseTask):
         min_progress_reward_scale = float(getattr(self, "min_progress_reward_scale", 2.0))
         time_penalty = float(getattr(self, "time_penalty", 0.005))
 
+        structure_gate = self._structure_reward_gate(min_dist)
+        progress_gate_scale = 1.0 - (1.0 - self.progress_gate_min_scale) * structure_gate
+
         rewards = progress_reward_scale * per_progress
         rewards += mean_progress_reward_scale * np.float32(mean_progress)
         rewards += min_progress_reward_scale * np.float32(min_progress)
+        rewards *= np.float32(progress_gate_scale)
 
         struct_metrics = compute_pursuit_structure_metrics_3v1(pursuer_pos, evader_pos)
         struct_arr = np.array(
@@ -768,9 +787,9 @@ class PursuitEvasion3v1Task(BaseTask):
         hold_steps = (int(getattr(task_state, "structure_hold_steps", 0)) + 1) if hold_ok else 0
         hold_ratio = float(np.clip(hold_steps / self.structure_hold_steps_cap, 0.0, 1.0))
 
-        rewards += np.float32(self.structure_reward_scale * struct_score)
-        rewards += np.float32(self.structure_improve_scale * struct_improve)
-        rewards += np.float32(self.structure_hold_reward_scale * hold_ratio)
+        rewards += np.float32(self.structure_reward_scale * structure_gate * struct_score)
+        rewards += np.float32(self.structure_improve_scale * structure_gate * struct_improve)
+        rewards += np.float32(self.structure_hold_reward_scale * structure_gate * hold_ratio)
         rewards -= np.float32(time_penalty)
 
         newly_captured = (min_dist <= self.capture_dist) and (not task_state.captured)
@@ -811,6 +830,8 @@ class PursuitEvasion3v1Task(BaseTask):
                 "C_cov=", struct_metrics["C_cov"],
                 "C_col=", struct_metrics["C_col"],
                 "D_ang=", struct_metrics["D_ang"],
+                "structure_gate=", structure_gate,
+                "progress_gate_scale=", progress_gate_scale,
                 "struct_score=", struct_score,
                 "struct_improve=", struct_improve,
                 "hold_steps=", hold_steps,
