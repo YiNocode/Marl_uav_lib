@@ -45,11 +45,6 @@ def _base_env_cfg() -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def _base_env_cfg() -> dict[str, Any]:
-    with open(ROOT / "configs" / "env" / "pyflyt_3v1.yaml", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch 3v1 pursuit-evasion training experiments.")
     parser.add_argument(
@@ -74,14 +69,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-evader-speed",
         type=float,
-        default=0.06,
-        help="Only used by speed_ratio when ratio mode is evader:pursuer.",
+        default=None,
+        help="Only used by speed_ratio when ratio mode is evader:pursuer. Defaults to the base train config.",
     )
     parser.add_argument(
         "--base-pursuer-speed",
         type=float,
-        default=0.20,
-        help="Only used by speed_ratio when ratio mode is pursuer:evader.",
+        default=None,
+        help="Only used by speed_ratio when ratio mode is pursuer:evader. Defaults to the base train config.",
     )
     parser.add_argument(
         "--ratio-mode",
@@ -118,37 +113,64 @@ def parse_ratio(text: str) -> tuple[float, float]:
     return left, right
 
 
-def speed_pair_for_ratio(args: argparse.Namespace, ratio_text: str) -> tuple[float, float]:
+def speed_pair_for_ratio(
+    args: argparse.Namespace,
+    ratio_text: str,
+    *,
+    default_pursuer_speed: float,
+    default_evader_speed: float,
+) -> tuple[float, float]:
     left, right = parse_ratio(ratio_text)
     if args.ratio_mode == "evader:pursuer":
-        evader_speed = float(args.base_evader_speed)
+        evader_speed = float(
+            default_evader_speed if args.base_evader_speed is None else args.base_evader_speed
+        )
         pursuer_speed = evader_speed * (right / left)
     else:
-        pursuer_speed = float(args.base_pursuer_speed)
+        pursuer_speed = float(
+            default_pursuer_speed if args.base_pursuer_speed is None else args.base_pursuer_speed
+        )
         evader_speed = pursuer_speed * (right / left)
     return pursuer_speed, evader_speed
 
 
-def build_speed_ratio_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
-    runs: list[tuple[str, dict[str, Any]]] = []
+def build_speed_ratio_runs(
+    args: argparse.Namespace,
+) -> list[tuple[str, dict[str, Any], str | None, dict[str, Any] | None]]:
+    runs: list[tuple[str, dict[str, Any], str | None, dict[str, Any] | None]] = []
+    base_cfg = _dream_ex1_train_cfg()
+    base_task = base_cfg.get("task", {}) or {}
+    default_pursuer_speed = float(base_task.get("pursuer_speed", 0.20))
+    default_evader_speed = float(base_task.get("evader_speed", 0.06))
+
     for ratio_text in args.speed_ratios:
-        pursuer_speed, evader_speed = speed_pair_for_ratio(args, ratio_text)
+        pursuer_speed, evader_speed = speed_pair_for_ratio(
+            args,
+            ratio_text,
+            default_pursuer_speed=default_pursuer_speed,
+            default_evader_speed=default_evader_speed,
+        )
         ratio_tag = ratio_text.replace(":", "to")
         for seed in args.seeds:
             cfg = _dream_ex1_train_cfg()
             env_cfg = _base_env_cfg()
             cfg["seed"] = int(seed)
             cfg["task"]["name"] = "pursuit_evasion_3v1_ex1"
-            cfg = _base_train_cfg()
-            env_cfg = _base_env_cfg()
-            cfg["seed"] = int(seed)
-            cfg["task"]["name"] = "pursuit_evasion_3v1"
             # Continuous control under PyFlyt 3v1 uses env.action_low/high as the true
             # pursuer velocity bounds. Keep task speed in sync for normalization only.
             cfg["task"]["pursuer_speed"] = float(pursuer_speed)
             cfg["task"]["evader_speed"] = float(evader_speed)
-            env_cfg["action_low"] = [-float(pursuer_speed), -float(pursuer_speed), -0.01, -0.15]
-            env_cfg["action_high"] = [float(pursuer_speed), float(pursuer_speed), 0.01, 0.15]
+            action_low = list(env_cfg.get("action_low", [-1.0, -1.0, -1.0, -1.0]))
+            action_high = list(env_cfg.get("action_high", [1.0, 1.0, 1.0, 1.0]))
+            if len(action_low) != 4 or len(action_high) != 4:
+                raise ValueError("Expected 4D action_low/action_high for PyFlyt 3v1 continuous control.")
+            # User requirement: only scale the x/y velocity bounds; keep yaw_rate and vz unchanged.
+            action_low[0] = -float(pursuer_speed)
+            action_low[1] = -float(pursuer_speed)
+            action_high[0] = float(pursuer_speed)
+            action_high[1] = float(pursuer_speed)
+            env_cfg["action_low"] = action_low
+            env_cfg["action_high"] = action_high
             run_name = f"pursuit_speed_ratio_{ratio_tag}_seed{seed}"
             env_name = f"pyflyt_3v1_speed_ratio_{ratio_tag}_seed{seed}"
             runs.append((run_name, cfg, env_name, env_cfg))
@@ -233,9 +255,13 @@ def main() -> None:
         summary["speed_ratios"] = list(args.speed_ratios)
         summary["ratio_mode"] = args.ratio_mode
         if args.ratio_mode == "evader:pursuer":
-            summary["base_evader_speed"] = float(args.base_evader_speed)
+            summary["base_evader_speed"] = (
+                None if args.base_evader_speed is None else float(args.base_evader_speed)
+            )
         else:
-            summary["base_pursuer_speed"] = float(args.base_pursuer_speed)
+            summary["base_pursuer_speed"] = (
+                None if args.base_pursuer_speed is None else float(args.base_pursuer_speed)
+            )
 
     print(yaml.safe_dump(summary, allow_unicode=True, sort_keys=False).strip())
 
