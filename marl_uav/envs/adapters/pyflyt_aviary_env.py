@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from gymnasium import spaces
 
@@ -48,6 +50,7 @@ class PyFlytAviaryEnv(BaseEnv):
         self.task_state = None
         self.prev_backend_state = None
         self.step_count = 0
+        self._avail_actions_cache: list[np.ndarray] | None = None
 
         self._action_space_type = str(action_space).lower()
         if self._action_space_type not in ("discrete", "continuous"):
@@ -109,14 +112,29 @@ class PyFlytAviaryEnv(BaseEnv):
         self.num_agents = int(obs.shape[0])
         self.obs_dim = int(obs.shape[1])
         self.state_dim = int(state.shape[0])
+        if self._action_space_type == "continuous":
+            avail = np.ones(self.action_dim, dtype=np.float32)
+        else:
+            avail = np.ones(self.n_actions, dtype=np.float32)
+        self._avail_actions_cache = [avail.copy() for _ in range(self.num_agents)]
         self._last_obs = obs
         self._last_state = state
         info = {"state": state}
         if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
-            lin_pos0 = backend_state.states[:, 3, :]
-            ps = lin_pos0[self.task_state.pursuer_ids]
-            pe = lin_pos0[self.task_state.evader_id]
-            info["pursuit_structure"] = compute_pursuit_structure_metrics_3v1(ps, pe)
+            latest_struct = np.asarray(
+                getattr(self.task_state, "latest_structure_metrics", None), dtype=np.float32
+            ).reshape(-1)
+            if latest_struct.shape[0] == 3:
+                info["pursuit_structure"] = {
+                    "C_cov": float(latest_struct[0]),
+                    "C_col": float(latest_struct[1]),
+                    "D_ang": float(latest_struct[2]),
+                }
+            else:
+                lin_pos0 = backend_state.states[:, 3, :]
+                ps = lin_pos0[self.task_state.pursuer_ids]
+                pe = lin_pos0[self.task_state.evader_id]
+                info["pursuit_structure"] = compute_pursuit_structure_metrics_3v1(ps, pe)
         if isinstance(self.task, PursuitEvasion3v1TaskEx2) and isinstance(
             self.task_state, PursuitEvasion3v1TaskEx2State
         ):
@@ -125,6 +143,7 @@ class PyFlytAviaryEnv(BaseEnv):
         return {"obs": obs, "state": state}, info
 
     def step(self, actions):
+        step_t0 = time.perf_counter()
         # 离散: actions (n_agents,) int; 连续: actions (n_agents, action_dim) float
         setpoints = self.task.action_to_setpoint(
             actions,
@@ -133,7 +152,9 @@ class PyFlytAviaryEnv(BaseEnv):
             action_space_type=self._action_space_type,
             action_dim=self.action_dim,
         )
+        t_after_action = time.perf_counter()
         backend_state = self.backend.step(setpoints)
+        t_after_backend = time.perf_counter()
         self.step_count += 1
 
         # 环境诊断（在 compute_rewards 更新 task_state 之前计算）
@@ -175,14 +196,17 @@ class PyFlytAviaryEnv(BaseEnv):
             backend_state,
             self.task_state,
         )
+        t_after_rewards = time.perf_counter()
         terminated, truncated = self.task.compute_terminated_truncated(
             backend_state,
             self.task_state,
             self.step_count,
         )
+        t_after_done = time.perf_counter()
 
         obs = self.task.build_obs(backend_state, self.task_state)
         state = self.task.build_state(backend_state, self.task_state)
+        t_after_obs_state = time.perf_counter()
         self._last_obs = obs
         self._last_state = state
 
@@ -260,9 +284,19 @@ class PyFlytAviaryEnv(BaseEnv):
         }
 
         if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
-            ps = lin_pos[self.task_state.pursuer_ids]
-            pe = lin_pos[self.task_state.evader_id]
-            pursuit_structure = compute_pursuit_structure_metrics_3v1(ps, pe)
+            latest_struct = np.asarray(
+                getattr(self.task_state, "latest_structure_metrics", None), dtype=np.float32
+            ).reshape(-1)
+            if latest_struct.shape[0] == 3:
+                pursuit_structure = {
+                    "C_cov": float(latest_struct[0]),
+                    "C_col": float(latest_struct[1]),
+                    "D_ang": float(latest_struct[2]),
+                }
+            else:
+                ps = lin_pos[self.task_state.pursuer_ids]
+                pe = lin_pos[self.task_state.evader_id]
+                pursuit_structure = compute_pursuit_structure_metrics_3v1(ps, pe)
             info.update(
                 {
                     "captured": captured,
@@ -277,6 +311,17 @@ class PyFlytAviaryEnv(BaseEnv):
                     "obstacle_terminated": obstacle_terminated,
                 }
             )
+
+        t_after_info = time.perf_counter()
+        info["timing"] = {
+            "total_s": float(t_after_info - step_t0),
+            "action_to_setpoint_s": float(t_after_action - step_t0),
+            "backend_step_s": float(t_after_backend - t_after_action),
+            "compute_rewards_s": float(t_after_rewards - t_after_backend),
+            "compute_done_s": float(t_after_done - t_after_rewards),
+            "build_obs_state_s": float(t_after_obs_state - t_after_done),
+            "build_info_s": float(t_after_info - t_after_obs_state),
+        }
 
         self.prev_backend_state = backend_state
         return {"obs": obs, "state": state}, rewards.tolist(), terminated, truncated, info
@@ -296,9 +341,13 @@ class PyFlytAviaryEnv(BaseEnv):
 
     def get_avail_actions(self):
         """离散：全动作可用，返回全 1 mask；连续：返回全 1（策略侧会忽略）。"""
-        if self._action_space_type == "continuous":
-            return [np.ones(self.action_dim, dtype=np.float32) for _ in range(self.num_agents)]
-        return [np.ones(self.n_actions, dtype=np.float32) for _ in range(self.num_agents)]
+        if self._avail_actions_cache is None:
+            if self._action_space_type == "continuous":
+                avail = np.ones(self.action_dim, dtype=np.float32)
+            else:
+                avail = np.ones(self.n_actions, dtype=np.float32)
+            self._avail_actions_cache = [avail.copy() for _ in range(self.num_agents)]
+        return self._avail_actions_cache
 
     def close(self):
         self.backend.close()

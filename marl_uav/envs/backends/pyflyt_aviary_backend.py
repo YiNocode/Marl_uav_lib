@@ -127,7 +127,6 @@ class PyFlytAviaryBackend:
                                                cameraPitch=-45,
                                                cameraTargetPosition=[0, 0, 5] )
         # 通过 set_mode 设置飞控模式
-        print("flight_mode:", self.flight_mode)
         self.env.set_mode([self.flight_mode] * self.num_agents)
 
         # 如果使用 QuadX 位置控制模式（例如 7），

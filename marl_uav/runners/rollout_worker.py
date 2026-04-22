@@ -215,6 +215,7 @@ class RolloutWorker(BaseRunner):
         reward_time_penalty_list: list[float] = []
         reward_collision_penalty_list: list[float] = []
         reward_reach_bonus_list: list[float] = []
+        env_timing_totals: dict[str, float] = {}
         # 追逃等任务的 episode 级统计
         any_capture = False
         first_capture_step = -1
@@ -243,6 +244,10 @@ class RolloutWorker(BaseRunner):
                 reward_collision_penalty_list.append(float(step_info["reward_collision_penalty"]))
             if "reward_reach_bonus" in step_info:
                 reward_reach_bonus_list.append(float(step_info["reward_reach_bonus"]))
+            timing_info = step_info.get("timing")
+            if isinstance(timing_info, dict):
+                for k, v in timing_info.items():
+                    env_timing_totals[k] = env_timing_totals.get(k, 0.0) + float(v)
 
             # 追逃任务相关 step 级信息
             if step_info.get("captured", False):
@@ -346,6 +351,13 @@ class RolloutWorker(BaseRunner):
             info["env_reward_reach_bonus"] = sum(reward_reach_bonus_list)
 
         # 若提供了 TensorBoard Logger，则在 episode 级别记录环境 & 诊断指标
+        if env_timing_totals:
+            info["env_timing_total_s"] = dict(env_timing_totals)
+            episode_len = max(int(info["episode_len"]), 1)
+            info["env_timing_mean_ms"] = {
+                k: 1000.0 * v / episode_len for k, v in env_timing_totals.items()
+            }
+
         if self._logger is not None:
             step = self._episode_idx
 
@@ -382,6 +394,11 @@ class RolloutWorker(BaseRunner):
                 env_metrics["reward_collision_penalty"] = float(
                     info["env_reward_collision_penalty"]
                 )
+            if "env_timing_mean_ms" in info:
+                timing_mean_ms = info["env_timing_mean_ms"]
+                if isinstance(timing_mean_ms, dict):
+                    for k, v in timing_mean_ms.items():
+                        env_metrics[f"time_{k.replace('_s', '')}_ms"] = float(v)
             if env_metrics:
                 self._logger.log_env_diagnostics(env_metrics, step=step)
 

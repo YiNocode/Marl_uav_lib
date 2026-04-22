@@ -157,17 +157,25 @@ class Trainer(BaseRunner):
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []
             epoch_losses: list[Dict[str, Any]] = []
+            rollout_time = 0.0
+            update_time = 0.0
+            env_timing_totals: Dict[str, float] = {}
 
             # 收集至少 rollout_steps 个时间步
             while steps_collected < rollout_steps:
                 t0 = time.time()
                 buf, info = self.rollout_worker.collect_episode(seed=env_step_seed)
                 t1 = time.time()
+                rollout_time += t1 - t0
                 env_step_seed += 1
 
                 episode = buf.get_episode()
                 T = int(episode["obs"].shape[0])
                 steps_collected += T
+                env_timing_info = info.get("env_timing_total_s")
+                if isinstance(env_timing_info, dict):
+                    for k, v in env_timing_info.items():
+                        env_timing_totals[k] = env_timing_totals.get(k, 0.0) + float(v)
 
                 epoch_returns.append(float(info["episode_return"]))
                 epoch_lens.append(int(info["episode_len"]))
@@ -175,6 +183,7 @@ class Trainer(BaseRunner):
                 batch = self._postprocess_episode(episode)
                 loss_dict = self._call_learner(batch)
                 t2 = time.time()
+                update_time += t2 - t1
                 epoch_losses.append(loss_dict)
 
                 # on-policy: 一条 episode 用完后即丢弃 / 清空 buffer
@@ -241,7 +250,29 @@ class Trainer(BaseRunner):
                         metrics=metrics_for_ckpt,
                     )
                 t3 = time.time()
-                print(f"rollout={t1 - t0:.2f}s update={t2 - t1:.2f}s log={t3 - t2:.2f}s")
+                rollout_ms_per_step = 1000.0 * rollout_time / max(steps_collected, 1)
+                update_ms_per_step = 1000.0 * update_time / max(steps_collected, 1)
+                timing_msg = ""
+                if env_timing_totals:
+                    env_ms_per_step = {
+                        k: 1000.0 * v / max(steps_collected, 1) for k, v in env_timing_totals.items()
+                    }
+                    timing_msg = (
+                        " env_step_ms:"
+                        f" total={env_ms_per_step.get('total_s', 0.0):.2f}"
+                        f" backend={env_ms_per_step.get('backend_step_s', 0.0):.2f}"
+                        f" reward={env_ms_per_step.get('compute_rewards_s', 0.0):.2f}"
+                        f" done={env_ms_per_step.get('compute_done_s', 0.0):.2f}"
+                        f" obs_state={env_ms_per_step.get('build_obs_state_s', 0.0):.2f}"
+                        f" info={env_ms_per_step.get('build_info_s', 0.0):.2f}"
+                        f" action={env_ms_per_step.get('action_to_setpoint_s', 0.0):.2f}"
+                    )
+                print(
+                    f"rollout={rollout_time:.2f}s ({rollout_ms_per_step:.2f}ms/step) "
+                    f"update={update_time:.2f}s ({update_ms_per_step:.2f}ms/step) "
+                    f"log={t3 - t2:.2f}s episodes={len(epoch_lens)} steps={steps_collected}"
+                    f"{timing_msg}"
+                )
 
 
         # 汇总整体指标
