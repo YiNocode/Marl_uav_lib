@@ -11,8 +11,8 @@ env_id: pyflyt_navigation
 action_space: continuous  # 可选: discrete | continuous
 action_dim: 4
 # 与 4 维连续控制对应：[vx, vy, yaw_rate, vz] 归一化下界/上界（可按任务调整）
-action_low: [-2.5, -2.5, -0.01, -0.15]
-action_high: [2.5, 2.5, 0.01, 0.15]
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
 
 backend:
   num_agents: 4
