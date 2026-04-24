@@ -240,6 +240,10 @@ class PursuitEvasion3v1TaskState:
     prev_role_target_dists: np.ndarray = field(
         default_factory=lambda: np.zeros((3,), dtype=np.float32)
     )
+    prev_mean_radius_xy: float = 0.0
+    initial_mean_radius_xy: float = 0.0
+    latest_target_radius_xy: float = 0.0
+    elapsed_steps: int = 0
 
 
 class PursuitEvasion3v1Task(BaseTask):
@@ -323,9 +327,17 @@ class PursuitEvasion3v1Task(BaseTask):
         manifold_target_phase: float = 0.0,
         manifold_target_radius_scale: float = 1.0,
         manifold_target_rho_min: float | None = None,
+        manifold_target_rho_max: float | None = None,
+        manifold_contraction_rate: float = 0.01,
+        manifold_structure_gate_scale: float = 0.75,
         assignment_inertia_margin: float = 0.05,
         role_progress_reward_scale: float = 0.75,
         residual_control_gain: float = 0.5,
+        radial_compress_reward_scale: float = 1.0,
+        radial_overshoot_penalty_scale: float = 0.5,
+        contraction_reward_norm: float | None = None,
+        contraction_phase_structure_scale: float = 0.3,
+        contraction_phase_compress_scale: float = 2.0,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -435,9 +447,25 @@ class PursuitEvasion3v1Task(BaseTask):
             if manifold_target_rho_min is None
             else max(float(manifold_target_rho_min), 0.0)
         )
+        self.manifold_target_rho_max = (
+            None
+            if manifold_target_rho_max is None
+            else max(float(manifold_target_rho_max), self.manifold_target_rho_min)
+        )
+        self.manifold_contraction_rate = max(float(manifold_contraction_rate), 0.0)
+        self.manifold_structure_gate_scale = float(np.clip(manifold_structure_gate_scale, 0.0, 1.0))
         self.assignment_inertia_margin = max(float(assignment_inertia_margin), 0.0)
         self.role_progress_reward_scale = float(role_progress_reward_scale)
         self.residual_control_gain = float(residual_control_gain)
+        self.radial_compress_reward_scale = float(radial_compress_reward_scale)
+        self.radial_overshoot_penalty_scale = float(radial_overshoot_penalty_scale)
+        self.contraction_reward_norm = (
+            max(float(self.capture_dist), 1e-6)
+            if contraction_reward_norm is None
+            else max(float(contraction_reward_norm), 1e-6)
+        )
+        self.contraction_phase_structure_scale = max(float(contraction_phase_structure_scale), 0.0)
+        self.contraction_phase_compress_scale = max(float(contraction_phase_compress_scale), 0.0)
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -524,6 +552,8 @@ class PursuitEvasion3v1Task(BaseTask):
             start_pos[evader_id],
             task_state=None,
         )
+        init_rel_xy = start_pos[pursuer_ids, :2] - start_pos[evader_id][None, :2]
+        init_mean_radius_xy = float(np.mean(np.linalg.norm(init_rel_xy, axis=1)))
         init_role_target_dists = np.linalg.norm(
             init_targets[init_assign] - start_pos[pursuer_ids],
             axis=1,
@@ -553,6 +583,13 @@ class PursuitEvasion3v1Task(BaseTask):
             structure_hold_steps=1 if self._structure_hold_satisfied(init_struct) else 0,
             assigned_target_indices=init_assign.astype(np.int64).copy(),
             prev_role_target_dists=init_role_target_dists.copy(),
+            prev_mean_radius_xy=init_mean_radius_xy,
+            initial_mean_radius_xy=init_mean_radius_xy,
+            latest_target_radius_xy=max(
+                self.manifold_target_rho_min,
+                init_mean_radius_xy * self.manifold_target_radius_scale,
+            ),
+            elapsed_steps=0,
         )
         return start_pos, start_orn, task_state
 
@@ -637,15 +674,17 @@ class PursuitEvasion3v1Task(BaseTask):
         self,
         pursuer_pos: np.ndarray,
         evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState | None = None,
     ) -> np.ndarray:
         pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
         evader_pos = np.asarray(evader_pos, dtype=np.float32).reshape(3)
-        rel_xy = pursuer_pos[:, :2] - evader_pos[None, :2]
-        rho_xy = np.linalg.norm(rel_xy, axis=1)
-        rho = max(
-            float(np.mean(rho_xy)) * self.manifold_target_radius_scale,
-            float(self.manifold_target_rho_min),
+        rho = self._compute_target_radius_xy(
+            pursuer_pos,
+            evader_pos,
+            task_state=task_state,
         )
+        if task_state is not None:
+            task_state.latest_target_radius_xy = float(rho)
         ang = self.manifold_target_phase + (2.0 * np.pi / 3.0) * np.arange(3, dtype=np.float32)
         targets = np.zeros((3, 3), dtype=np.float32)
         targets[:, 0] = evader_pos[0] + rho * np.cos(ang)
@@ -660,7 +699,7 @@ class PursuitEvasion3v1Task(BaseTask):
         task_state: PursuitEvasion3v1TaskState | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
-        targets = self._reference_manifold_targets(pursuer_pos, evader_pos)
+        targets = self._reference_manifold_targets(pursuer_pos, evader_pos, task_state=task_state)
         if self.role_assignment_mode == "fixed":
             return targets, np.arange(3, dtype=np.int64)
 
@@ -889,6 +928,43 @@ class PursuitEvasion3v1Task(BaseTask):
         gate_input = (far_dist - float(min_dist)) / max(far_dist - near_dist, 1e-6)
         return float(self._smoothstep01(gate_input))
 
+    def _mean_radius_xy(self, pursuer_pos: np.ndarray, evader_pos: np.ndarray) -> float:
+        pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
+        evader_pos = np.asarray(evader_pos, dtype=np.float32).reshape(3)
+        rel_xy = pursuer_pos[:, :2] - evader_pos[None, :2]
+        return float(np.mean(np.linalg.norm(rel_xy, axis=1)))
+
+    def _compute_target_radius_xy(
+        self,
+        pursuer_pos: np.ndarray,
+        evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState | None = None,
+    ) -> float:
+        pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
+        evader_pos = np.asarray(evader_pos, dtype=np.float32).reshape(3)
+        mean_radius_xy = self._mean_radius_xy(pursuer_pos, evader_pos)
+        rho_min = float(self.manifold_target_rho_min)
+        if task_state is None:
+            rho0 = mean_radius_xy
+        else:
+            rho0 = float(getattr(task_state, "initial_mean_radius_xy", mean_radius_xy))
+        rho0 = max(rho0 * self.manifold_target_radius_scale, rho_min)
+        rho_max = rho0 if self.manifold_target_rho_max is None else max(float(self.manifold_target_rho_max), rho_min)
+
+        elapsed_steps = 0 if task_state is None else int(getattr(task_state, "elapsed_steps", 0))
+        decay = np.exp(-self.manifold_contraction_rate * float(elapsed_steps))
+        rho_decay = rho_min + (rho_max - rho_min) * float(decay)
+
+        struct_metrics = compute_pursuit_structure_metrics_3v1(pursuer_pos, evader_pos)
+        struct_score = self._structure_score_from_metrics(struct_metrics)
+        hold_ready = 1.0 if self._structure_hold_satisfied(struct_metrics) else 0.0
+        structure_gate = hold_ready * struct_score
+        rho_struct = rho_max - structure_gate * (rho_max - rho_min)
+
+        gate_mix = self.manifold_structure_gate_scale
+        rho_target = (1.0 - gate_mix) * rho_decay + gate_mix * min(rho_decay, rho_struct)
+        return float(np.clip(rho_target, rho_min, rho_max))
+
     # ---------------------------------------------------------------------
     # reward / termination
     # ---------------------------------------------------------------------
@@ -931,6 +1007,7 @@ class PursuitEvasion3v1Task(BaseTask):
         ).astype(np.float32)
         min_dist = float(np.min(dists))
         mean_dist = float(np.mean(dists))
+        mean_radius_xy = self._mean_radius_xy(pursuer_pos, evader_pos)
         p = len(pursuer_ids)
 
         prev = np.asarray(task_state.prev_pursuer_dists, dtype=np.float32).reshape(-1)
@@ -961,6 +1038,7 @@ class PursuitEvasion3v1Task(BaseTask):
             -1.0,
             1.0,
         ).astype(np.float32)
+        prev_mean_radius_xy = float(getattr(task_state, "prev_mean_radius_xy", mean_radius_xy))
 
         structure_gate = self._structure_reward_gate(min_dist)
         progress_gate_scale = 1.0 - (1.0 - self.progress_gate_min_scale) * structure_gate
@@ -994,10 +1072,44 @@ class PursuitEvasion3v1Task(BaseTask):
         hold_ok = self._structure_hold_satisfied(struct_metrics)
         hold_steps = (int(getattr(task_state, "structure_hold_steps", 0)) + 1) if hold_ok else 0
         hold_ratio = float(np.clip(hold_steps / self.structure_hold_steps_cap, 0.0, 1.0))
+        contraction_phase = 1.0 if hold_ok else 0.0
+        structure_scale = (
+            self.contraction_phase_structure_scale if contraction_phase > 0.0 else 1.0
+        )
+        compress_scale = (
+            self.contraction_phase_compress_scale if contraction_phase > 0.0 else 1.0
+        )
+        target_radius_xy = self._compute_target_radius_xy(
+            pursuer_pos,
+            evader_pos,
+            task_state=task_state,
+        )
+        radial_compress = float(
+            np.clip(
+                (prev_mean_radius_xy - mean_radius_xy) / self.contraction_reward_norm,
+                -1.0,
+                1.0,
+            )
+        )
+        radial_gap = max(0.0, mean_radius_xy - target_radius_xy)
 
-        rewards += np.float32(self.structure_reward_scale * structure_gate * struct_score)
-        rewards += np.float32(self.structure_improve_scale * structure_gate * struct_improve)
-        rewards += np.float32(self.structure_hold_reward_scale * structure_gate * hold_ratio)
+        rewards += np.float32(self.structure_reward_scale * structure_scale * structure_gate * struct_score)
+        rewards += np.float32(self.structure_improve_scale * structure_scale * structure_gate * struct_improve)
+        rewards += np.float32(self.structure_hold_reward_scale * structure_scale * structure_gate * hold_ratio)
+        rewards += np.float32(
+            self.radial_compress_reward_scale
+            * compress_scale
+            * contraction_phase
+            * structure_gate
+            * radial_compress
+        )
+        rewards -= np.float32(
+            self.radial_overshoot_penalty_scale
+            * compress_scale
+            * contraction_phase
+            * structure_gate
+            * (radial_gap / self.contraction_reward_norm)
+        )
         rewards -= np.float32(time_penalty)
 
         newly_captured = (min_dist <= self.capture_dist) and (not task_state.captured)
@@ -1018,6 +1130,9 @@ class PursuitEvasion3v1Task(BaseTask):
             task_state.structure_hold_steps = int(hold_steps)
             task_state.assigned_target_indices = assignment.astype(np.int64).copy()
             task_state.prev_role_target_dists = role_target_dists.copy()
+            task_state.prev_mean_radius_xy = float(mean_radius_xy)
+            task_state.latest_target_radius_xy = float(target_radius_xy)
+            task_state.elapsed_steps = int(getattr(task_state, "elapsed_steps", 0)) + 1
             return rewards.astype(np.float32)
 
         p_oob_mask = self._get_oob_mask(pursuer_pos)
@@ -1048,6 +1163,11 @@ class PursuitEvasion3v1Task(BaseTask):
                 "struct_score=", struct_score,
                 "struct_improve=", struct_improve,
                 "hold_steps=", hold_steps,
+                "contraction_phase=", contraction_phase,
+                "mean_radius_xy=", mean_radius_xy,
+                "target_radius_xy=", target_radius_xy,
+                "radial_compress=", radial_compress,
+                "radial_gap=", radial_gap,
                 "rewards=", rewards,
             )
 
@@ -1057,6 +1177,9 @@ class PursuitEvasion3v1Task(BaseTask):
         task_state.structure_hold_steps = int(hold_steps)
         task_state.assigned_target_indices = assignment.astype(np.int64).copy()
         task_state.prev_role_target_dists = role_target_dists.copy()
+        task_state.prev_mean_radius_xy = float(mean_radius_xy)
+        task_state.latest_target_radius_xy = float(target_radius_xy)
+        task_state.elapsed_steps = int(getattr(task_state, "elapsed_steps", 0)) + 1
         return rewards.astype(np.float32)
 
     def compute_terminated_truncated(
