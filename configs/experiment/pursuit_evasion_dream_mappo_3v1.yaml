@@ -12,7 +12,7 @@ task:
   capture_dist: 1
   episode_limit: 1000
   pursuer_speed: 0.20
-  evader_speed: 0.06
+  evader_speed: 0.25
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5

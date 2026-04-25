@@ -54,10 +54,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=str,
-        default=str(Path("configs") / "experiment" / "pursuit_evasion_mappo_3v1.yaml"),
+        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
         help="顶层实验配置 (包含 env/algo/model/task 子配置路径)",
     )
-    p.add_argument("--seed", type=int, default=6, help="评估用随机种子（首个种子）")
+    p.add_argument("--seed", type=int, default=203, help="评估用随机种子（首个种子）")
     p.add_argument("--num-seeds", type=int, default=1, help="评估种子数量，每个种子独立跑若干 episode")
     p.add_argument("--episodes", type=int, default=20, help="每个种子评估 episode 数量")
     p.add_argument(
@@ -1081,7 +1081,7 @@ def main() -> None:
 
     if not ckpt_path.exists():
         raise FileNotFoundError(
-            f"Checkpoint not found: {ckpt_path}. 璇峰厛閫氳繃 train.py 璁粌骞朵繚瀛樻ā鍨嬨€?"
+            f"Checkpoint not found: {ckpt_path}."
         )
 
     # 构建环境 / 策略 / learner，并从 checkpoint 恢复参数
