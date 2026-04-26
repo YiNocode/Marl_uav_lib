@@ -1,0 +1,111 @@
+base_config: configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
+output_dir: configs/generated/reward_grid
+manifest_name: ex1_reward_grid_manifest.csv
+run_prefix: ex1_reward_grid
+
+seeds:
+  - 101
+  - 102
+  - 103
+
+eval_episodes: 20
+
+fixed_overrides:
+  task.name: pursuit_evasion_3v1_ex1
+  num_epochs: 12000
+  rollout_steps: 256
+  eval_episodes: 10
+  log_interval: 1
+
+# First-round reward search:
+# keep the number of runs manageable by using curated cases
+# instead of a full cartesian product.
+cases:
+  - name: baseline
+    params:
+      task.structure_reward_scale: 0.25
+      task.structure_hold_reward_scale: 0.05
+      task.structure_improve_scale: 0.2
+      task.radial_compress_reward_scale: 1.0
+      task.radial_overshoot_penalty_scale: 0.5
+      task.contraction_phase_structure_scale: 0.3
+      task.contraction_phase_compress_scale: 2.0
+      task.manifold_contraction_rate: 0.01
+      task.manifold_structure_gate_scale: 0.75
+  - name: compress_soft
+    params:
+      task.structure_reward_scale: 0.20
+      task.structure_hold_reward_scale: 0.03
+      task.structure_improve_scale: 0.15
+      task.radial_compress_reward_scale: 1.5
+      task.radial_overshoot_penalty_scale: 0.25
+      task.contraction_phase_structure_scale: 0.25
+      task.contraction_phase_compress_scale: 2.0
+      task.manifold_contraction_rate: 0.01
+      task.manifold_structure_gate_scale: 0.70
+  - name: compress_balanced
+    params:
+      task.structure_reward_scale: 0.18
+      task.structure_hold_reward_scale: 0.03
+      task.structure_improve_scale: 0.15
+      task.radial_compress_reward_scale: 2.0
+      task.radial_overshoot_penalty_scale: 0.35
+      task.contraction_phase_structure_scale: 0.20
+      task.contraction_phase_compress_scale: 2.5
+      task.manifold_contraction_rate: 0.012
+      task.manifold_structure_gate_scale: 0.75
+  - name: compress_aggressive
+    params:
+      task.structure_reward_scale: 0.15
+      task.structure_hold_reward_scale: 0.02
+      task.structure_improve_scale: 0.12
+      task.radial_compress_reward_scale: 2.5
+      task.radial_overshoot_penalty_scale: 0.50
+      task.contraction_phase_structure_scale: 0.15
+      task.contraction_phase_compress_scale: 3.0
+      task.manifold_contraction_rate: 0.015
+      task.manifold_structure_gate_scale: 0.80
+  - name: gate_strict
+    params:
+      task.structure_reward_scale: 0.20
+      task.structure_hold_reward_scale: 0.03
+      task.structure_improve_scale: 0.15
+      task.radial_compress_reward_scale: 2.0
+      task.radial_overshoot_penalty_scale: 0.40
+      task.contraction_phase_structure_scale: 0.20
+      task.contraction_phase_compress_scale: 2.5
+      task.manifold_contraction_rate: 0.012
+      task.manifold_structure_gate_scale: 0.85
+  - name: gate_relaxed
+    params:
+      task.structure_reward_scale: 0.22
+      task.structure_hold_reward_scale: 0.04
+      task.structure_improve_scale: 0.18
+      task.radial_compress_reward_scale: 1.8
+      task.radial_overshoot_penalty_scale: 0.30
+      task.contraction_phase_structure_scale: 0.25
+      task.contraction_phase_compress_scale: 2.2
+      task.manifold_contraction_rate: 0.010
+      task.manifold_structure_gate_scale: 0.65
+
+naming:
+  task.structure_reward_scale: srs
+  task.structure_hold_reward_scale: shs
+  task.structure_improve_scale: sis
+  task.radial_compress_reward_scale: rcs
+  task.radial_overshoot_penalty_scale: rop
+  task.contraction_phase_structure_scale: cpss
+  task.contraction_phase_compress_scale: cpcs
+  task.manifold_contraction_rate: mcr
+  task.manifold_structure_gate_scale: msgs
+
+summary_param_keys:
+  - task.structure_reward_scale
+  - task.structure_hold_reward_scale
+  - task.structure_improve_scale
+  - task.radial_compress_reward_scale
+  - task.radial_overshoot_penalty_scale
+  - task.contraction_phase_structure_scale
+  - task.contraction_phase_compress_scale
+  - task.manifold_contraction_rate
+  - task.manifold_structure_gate_scale
