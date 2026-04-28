@@ -1,0 +1,34 @@
+base_config: configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
+output_dir: configs/generated/evader_speed_sweep
+manifest_name: ex1_evader_speed_manifest.csv
+run_prefix: ex1_evader_speed
+
+seeds:
+  - 101
+  - 102
+  - 103
+
+eval_episodes: 20
+
+# Manageable first pass: 0.10 -> 0.25 with 0.03 increments
+speed_min: 0.10
+speed_max: 0.25
+speed_step: 0.03
+
+fixed_overrides:
+  task.name: pursuit_evasion_3v1_ex1
+  num_epochs: 12000
+  rollout_steps: 256
+  eval_episodes: 10
+  log_interval: 1
+
+  # Fixed reward setting during speed sweep
+  task.structure_reward_scale: 0.18
+  task.structure_hold_reward_scale: 0.03
+  task.structure_improve_scale: 0.15
+  task.radial_compress_reward_scale: 2.0
+  task.radial_overshoot_penalty_scale: 0.35
+  task.contraction_phase_structure_scale: 0.20
+  task.contraction_phase_compress_scale: 2.5
+  task.manifold_contraction_rate: 0.012
+  task.manifold_structure_gate_scale: 0.75

@@ -7,6 +7,7 @@ shift || true
 TRAIN_CONFIG="${TRAIN_CONFIG:-configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml}"
 EVAL_CONFIG="${EVAL_CONFIG:-$TRAIN_CONFIG}"
 GRID_CONFIG="${GRID_CONFIG:-configs/search/ex1_reward_grid.yaml}"
+SPEED_SWEEP_CONFIG="${SPEED_SWEEP_CONFIG:-configs/search/ex1_evader_speed_sweep.yaml}"
 EVAL_SEED="${EVAL_SEED:-101}"
 EVAL_EPISODES="${EVAL_EPISODES:-20}"
 EVAL_NUM_SEEDS="${EVAL_NUM_SEEDS:-1}"
@@ -44,12 +45,26 @@ case "${MODE}" in
       --search-config "${GRID_CONFIG}" \
       "$@"
     ;;
+  speed-sweep)
+    echo "[container] speed_sweep_config=${SPEED_SWEEP_CONFIG}"
+    exec python scripts/sweep_ex1_evader_speed.py \
+      --sweep-config "${SPEED_SWEEP_CONFIG}" \
+      --overwrite \
+      --launch \
+      "$@"
+    ;;
+  summarize-speed-sweep)
+    echo "[container] speed_sweep_config=${SPEED_SWEEP_CONFIG}"
+    exec python scripts/summarize_ex1_evader_speed.py \
+      --sweep-config "${SPEED_SWEEP_CONFIG}" \
+      "$@"
+    ;;
   bash)
     exec /bin/bash "$@"
     ;;
   *)
     echo "Unsupported mode: ${MODE}" >&2
-    echo "Supported modes: train | eval | grid | summarize-grid | bash" >&2
+    echo "Supported modes: train | eval | grid | summarize-grid | speed-sweep | summarize-speed-sweep | bash" >&2
     exit 2
     ;;
 esac

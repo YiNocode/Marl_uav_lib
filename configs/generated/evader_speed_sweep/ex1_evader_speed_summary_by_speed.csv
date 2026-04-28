@@ -1,0 +1,2 @@
+speed_id,num_seeds,task.evader_speed,capture_rate,timeout_rate,collision_rate,success_capture_rate,avg_episode_return,avg_episode_len,mean_C_cov,mean_C_col
+s001,3,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0

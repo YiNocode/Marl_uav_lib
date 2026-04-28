@@ -45,7 +45,25 @@ This will:
 3. run eval after training
 4. write summaries under `configs/generated/reward_grid/`
 
-## 4. Recompute reward-grid summaries
+## 4. Run evader-speed sweep
+
+```bash
+docker run --rm --gpus all \
+  -e SPEED_SWEEP_CONFIG=configs/search/ex1_evader_speed_sweep.yaml \
+  -v $(pwd)/results:/workspace/results \
+  -v $(pwd)/checkpoints:/workspace/checkpoints \
+  -v $(pwd)/save_result:/workspace/save_result \
+  marl-uav:gpu speed-sweep
+```
+
+This will:
+
+1. generate one config per evader speed
+2. train each run with fixed reward settings
+3. run eval after training
+4. write capture-rate summaries under `configs/generated/evader_speed_sweep/`
+
+## 5. Recompute reward-grid summaries
 
 ```bash
 docker run --rm \
@@ -54,7 +72,16 @@ docker run --rm \
   marl-uav:gpu summarize-grid
 ```
 
-## 5. Run evaluation only
+## 6. Recompute evader-speed summaries
+
+```bash
+docker run --rm \
+  -e SPEED_SWEEP_CONFIG=configs/search/ex1_evader_speed_sweep.yaml \
+  -v $(pwd)/results:/workspace/results \
+  marl-uav:gpu summarize-speed-sweep
+```
+
+## 7. Run evaluation only
 
 ```bash
 docker run --rm --gpus all \
