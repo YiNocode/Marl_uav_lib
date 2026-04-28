@@ -1,0 +1,23 @@
+env_id: pyflyt_navigation
+action_space: continuous
+action_dim: 4
+action_low:
+- -1.2
+- -1.2
+- -0.01
+- -0.15
+action_high:
+- 1.2
+- 1.2
+- 0.01
+- 0.15
+backend:
+  num_agents: 4
+  drone_type: quadx
+  render: false
+  physics_hz: 240
+  control_hz: 60
+  world_scale: 5.0
+  flight_mode: 6
+  seed_offset: 0
+  drone_options: {}

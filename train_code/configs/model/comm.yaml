@@ -1,0 +1,5 @@
+# Communication module config
+
+type: comm
+comm_dim: 32
+num_rounds: 2

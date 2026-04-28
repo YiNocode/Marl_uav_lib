@@ -1,0 +1,6 @@
+# Attention model config
+
+type: attention
+hidden_dim: 64
+num_heads: 4
+dropout: 0.1

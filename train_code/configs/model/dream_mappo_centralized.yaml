@@ -1,0 +1,26 @@
+# Dream-MAPPO：centralized critic + 流形几何 actor（见 marl_uav.policies.dream_mappo_policy）
+
+type: dream_mappo_centralized_critic
+
+actor:
+  encoder_type: mlp
+  hidden_dims: [64, 64]
+  activation: relu
+
+critic:
+  encoder_type: mlp
+  hidden_dims: [128, 128]
+  activation: relu
+
+share_backbone: false
+
+# 几何与全局头超参（与 PursuitEvasion3v1 build_state 归一化坐标一致）
+dream:
+  num_pursuers: 3
+  # 残差 a_res = a_max_residual * tanh(z)，z~N(μ,σ)；各维同标度，需与 env action 范围协调
+  a_max_residual: 0.08
+  a_max_geom: 0.15
+  sigma_p: 0.5
+  rho_scale: 0.5
+  rho_min: 0.05
+  psi_scale: 3.14159265

@@ -1,0 +1,2 @@
+combo_id,case_name,num_seeds,task.structure_reward_scale,task.structure_hold_reward_scale,task.structure_improve_scale,task.radial_compress_reward_scale,task.radial_overshoot_penalty_scale,task.contraction_phase_structure_scale,task.contraction_phase_compress_scale,task.manifold_contraction_rate,task.manifold_structure_gate_scale,capture_rate,timeout_rate,collision_rate,success_capture_rate,avg_episode_return,avg_episode_len,mean_C_cov,mean_C_col
+c001,baseline,3,0.25,0.05,0.2,1.0,0.5,0.3,2.0,0.01,0.75,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0

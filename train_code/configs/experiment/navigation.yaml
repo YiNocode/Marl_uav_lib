@@ -1,0 +1,25 @@
+# IPPO on PyFlyt NavigationTask experiment config
+#
+# - Env:   PyFlytAviaryEnv + NavigationTask
+# - Algo:  IPPO (independent PPO with shared actor-critic)
+# - Model: MLP actor-critic policy
+
+env: configs/env/pyflyt.yaml
+algo: configs/algo/ippo.yaml
+model: configs/model/mlp.yaml
+
+# NavigationTask parameters
+task:
+  world_xy: 1.5
+  z_min: 0.5
+  z_max: 1.5
+  goal_reach_dist: 0.3
+  episode_limit: 500
+
+# Training schedule / misc
+seed: 2
+num_epochs: 5000
+rollout_steps: 512
+log_interval: 1
+eval_episodes: 20
+

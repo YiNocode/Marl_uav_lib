@@ -1,0 +1,6 @@
+# RNN model config
+
+type: rnn
+hidden_dim: 64
+num_layers: 1
+rnn_type: gru

@@ -1,0 +1,33 @@
+ # MAPPO algorithm config (continuous or discrete action space)
+#
+# 对 PursuitEvasion3v1 连续控制场景，我们使用连续动作空间：
+# - env:  action_space: continuous
+# - algo: action_space: continuous
+#
+# 如需切换到离散动作版本，请同时修改 env 与 algo 中的 action_space 字段保持一致。
+
+algo: mappo
+
+# 动作空间类型：'discrete' 或 'continuous'
+action_space: continuous
+
+# 折扣与 GAE
+gamma: 0.99
+gae_lambda: 0.95
+
+# PPO clipping
+clip_ratio: 0.2
+
+# 损失系数
+value_coef: 0.5
+entropy_coef: 0.001
+
+
+# 优化器设置
+lr: 3e-4
+epochs: 4          # number of PPO epochs per batch
+minibatch_size: 256  # 0 表示不拆分 mini-batch，整批更新；如需 mini-batch，可改为 >0
+max_grad_norm: 0.5
+
+# 是否使用 centralized critic
+use_centralized_critic: true

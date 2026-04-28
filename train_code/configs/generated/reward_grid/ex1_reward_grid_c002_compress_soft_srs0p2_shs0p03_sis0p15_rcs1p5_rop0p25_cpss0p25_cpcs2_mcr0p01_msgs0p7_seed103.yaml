@@ -1,0 +1,45 @@
+env: configs/env/pyflyt_3v1.yaml
+algo: configs/algo/dream_mappo.yaml
+model: configs/model/dream_mappo_centralized.yaml
+task:
+  name: pursuit_evasion_3v1_ex1
+  world_xy: 20.0
+  z_min: 0.5
+  z_max: 5.0
+  capture_dist: 1
+  episode_limit: 1000
+  pursuer_speed: 0.15
+  evader_speed: 0.25
+  min_pursuer_sep: 0.6
+  progress_reward_scale: 1.0
+  min_progress_reward_scale: 0.5
+  time_penalty: 0.05
+  capture_bonus: 200.0
+  collision_penalty: 2.0
+  oob_penalty: 30.0
+  evader_boundary_gain: 0.8
+  mean_progress_reward_scale: 0.5
+  capture_bonus_team: 30.0
+  capture_bonus_individual: 10.0
+  progress_dist_norm: 2.0
+  structure_reward_scale: 0.2
+  structure_improve_scale: 0.15
+  structure_hold_reward_scale: 0.03
+  structure_cov_weight: 1.0
+  structure_col_weight: 1.2
+  structure_ang_weight: 1.0
+  structure_cov_threshold: 0.75
+  structure_col_threshold: 0.35
+  structure_ang_threshold: 0.75
+  structure_hold_steps_cap: 30
+  radial_compress_reward_scale: 1.5
+  radial_overshoot_penalty_scale: 0.25
+  contraction_phase_structure_scale: 0.25
+  contraction_phase_compress_scale: 2.0
+  manifold_contraction_rate: 0.01
+  manifold_structure_gate_scale: 0.7
+seed: 103
+num_epochs: 12000
+rollout_steps: 256
+log_interval: 1
+eval_episodes: 10
