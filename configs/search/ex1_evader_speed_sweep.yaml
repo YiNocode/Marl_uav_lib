@@ -24,7 +24,7 @@ fixed_overrides:
 
   # Fixed reward setting during speed sweep
   task.structure_reward_scale: 0.18
-  task.structure_hold_reward_scale: 0.03
+  task.structure_hold_reward_scale: 0.01
   task.structure_improve_scale: 0.15
   task.radial_compress_reward_scale: 2.0
   task.radial_overshoot_penalty_scale: 0.35
@@ -32,3 +32,6 @@ fixed_overrides:
   task.contraction_phase_compress_scale: 2.5
   task.manifold_contraction_rate: 0.012
   task.manifold_structure_gate_scale: 0.75
+  task.residual_control_gain: 0.10
+  task.progress_gate_min_scale: 0.90
+  task.role_progress_reward_scale: 1.00

@@ -338,6 +338,12 @@ class PursuitEvasion3v1Task(BaseTask):
         contraction_reward_norm: float | None = None,
         contraction_phase_structure_scale: float = 0.3,
         contraction_phase_compress_scale: float = 2.0,
+        encirclement_capture_enabled: bool = True,
+        encirclement_capture_hold_steps: int = 8,
+        encirclement_capture_max_gap_deg: float = 135.0,
+        encirclement_capture_radius_scale: float = 1.6,
+        encirclement_capture_min_dist_scale: float = 1.5,
+        encirclement_capture_radius_margin_scale: float = 0.35,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -466,6 +472,17 @@ class PursuitEvasion3v1Task(BaseTask):
         )
         self.contraction_phase_structure_scale = max(float(contraction_phase_structure_scale), 0.0)
         self.contraction_phase_compress_scale = max(float(contraction_phase_compress_scale), 0.0)
+        self.encirclement_capture_enabled = bool(encirclement_capture_enabled)
+        self.encirclement_capture_hold_steps = max(int(encirclement_capture_hold_steps), 1)
+        self.encirclement_capture_max_gap_rad = np.deg2rad(
+            float(np.clip(encirclement_capture_max_gap_deg, 60.0, 180.0))
+        )
+        self.encirclement_capture_radius_scale = max(float(encirclement_capture_radius_scale), 1.0)
+        self.encirclement_capture_min_dist_scale = max(float(encirclement_capture_min_dist_scale), 1.0)
+        self.encirclement_capture_radius_margin_scale = max(
+            float(encirclement_capture_radius_margin_scale),
+            0.0,
+        )
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -965,6 +982,33 @@ class PursuitEvasion3v1Task(BaseTask):
         rho_target = (1.0 - gate_mix) * rho_decay + gate_mix * min(rho_decay, rho_struct)
         return float(np.clip(rho_target, rho_min, rho_max))
 
+    def _encirclement_capture_satisfied(
+        self,
+        *,
+        struct_metrics: dict[str, Any],
+        hold_steps: int,
+        min_dist: float,
+        mean_radius_xy: float,
+        target_radius_xy: float,
+    ) -> bool:
+        if not self.encirclement_capture_enabled:
+            return False
+        if int(hold_steps) < self.encirclement_capture_hold_steps:
+            return False
+
+        phi_max = float(struct_metrics.get("phi_max", np.inf))
+        if not np.isfinite(phi_max) or phi_max > self.encirclement_capture_max_gap_rad:
+            return False
+
+        if float(min_dist) > self.encirclement_capture_min_dist_scale * self.capture_dist:
+            return False
+
+        radius_cap = max(
+            self.encirclement_capture_radius_scale * self.capture_dist,
+            float(target_radius_xy) + self.encirclement_capture_radius_margin_scale * self.capture_dist,
+        )
+        return bool(float(mean_radius_xy) <= radius_cap)
+
     # ---------------------------------------------------------------------
     # reward / termination
     # ---------------------------------------------------------------------
@@ -1112,7 +1156,14 @@ class PursuitEvasion3v1Task(BaseTask):
         )
         rewards -= np.float32(time_penalty)
 
-        newly_captured = (min_dist <= self.capture_dist) and (not task_state.captured)
+        encirclement_capture = self._encirclement_capture_satisfied(
+            struct_metrics=struct_metrics,
+            hold_steps=hold_steps,
+            min_dist=min_dist,
+            mean_radius_xy=mean_radius_xy,
+            target_radius_xy=target_radius_xy,
+        )
+        newly_captured = ((min_dist <= self.capture_dist) or encirclement_capture) and (not task_state.captured)
         if newly_captured:
             capturer_idx = int(np.argmin(dists))
             task_state.captured = True
@@ -1168,6 +1219,7 @@ class PursuitEvasion3v1Task(BaseTask):
                 "target_radius_xy=", target_radius_xy,
                 "radial_compress=", radial_compress,
                 "radial_gap=", radial_gap,
+                "encirclement_capture=", encirclement_capture,
                 "rewards=", rewards,
             )
 
