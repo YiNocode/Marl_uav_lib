@@ -84,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Maximum number of training seeds to use from the search config for each reward setting.",
     )
+    parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="Split reward-setting combos into this many shards so multiple terminals can run in parallel.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index to run from the split defined by --num-shards.",
+    )
     return parser.parse_args()
 
 
@@ -191,6 +203,16 @@ def normalize_cases(search_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     for idx, combo in enumerate(combos, start=1):
         normalized.append({"case_name": f"combo_{idx:03d}", "params": combo})
     return normalized
+
+
+def select_shard(cases: list[dict[str, Any]], *, num_shards: int, shard_index: int) -> list[dict[str, Any]]:
+    if num_shards <= 0:
+        raise ValueError("--num-shards must be positive.")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise ValueError("--shard-index must satisfy 0 <= shard-index < num-shards.")
+    if num_shards == 1:
+        return cases
+    return [case for idx, case in enumerate(cases) if idx % num_shards == shard_index]
 
 
 def build_run_name(
@@ -389,6 +411,12 @@ def write_summary_files(
     return per_run_path, grouped_path
 
 
+def with_shard_suffix(path: Path, *, num_shards: int, shard_index: int) -> Path:
+    if num_shards == 1:
+        return path
+    return path.with_name(f"{path.stem}_shard{shard_index + 1}of{num_shards}{path.suffix}")
+
+
 def main() -> None:
     args = parse_args()
     search_cfg_path = ROOT / args.search_config
@@ -402,7 +430,11 @@ def main() -> None:
     output_dir_rel = str(search_cfg.get("output_dir", "grid_result"))
     output_dir = ROOT / output_dir_rel
     manifest_name = str(search_cfg.get("manifest_name", f"{run_prefix}_manifest.csv"))
-    manifest_path = output_dir / manifest_name
+    manifest_path = with_shard_suffix(
+        output_dir / manifest_name,
+        num_shards=args.num_shards,
+        shard_index=args.shard_index,
+    )
 
     seeds = [int(x) for x in search_cfg.get("seeds", [int(base_cfg.get("seed", 42))])]
     if args.max_train_seeds <= 0:
@@ -416,9 +448,9 @@ def main() -> None:
     )
     fixed_overrides = dict(search_cfg.get("fixed_overrides", {}) or {})
     cases = normalize_cases(search_cfg)
+    cases = select_shard(cases, num_shards=args.num_shards, shard_index=args.shard_index)
     naming_map = dict(search_cfg.get("naming", {}) or {})
 
-    manifest_path = output_dir / manifest_name
     if args.summarize_only:
         if not manifest_path.exists():
             raise FileNotFoundError(f"Manifest not found for summarize-only mode: {manifest_path}")
@@ -457,6 +489,8 @@ def main() -> None:
             {
                 "search_config": str(search_cfg_path.relative_to(ROOT)).replace("\\", "/"),
                 "base_config": base_config_rel,
+                "num_shards": args.num_shards,
+                "shard_index": args.shard_index,
                 "num_param_combos": len(combos),
                 "configured_seeds": configured_seeds,
                 "effective_seeds": seeds,
@@ -572,7 +606,7 @@ def main() -> None:
         output_dir=output_dir,
         manifest_rows=planned_rows,
         param_keys=param_keys,
-        run_prefix=run_prefix,
+        run_prefix=run_prefix if args.num_shards == 1 else f"{run_prefix}_shard{args.shard_index + 1}of{args.num_shards}",
     )
     print(f"[summary] {per_run_path.relative_to(ROOT)}")
     print(f"[summary] {grouped_path.relative_to(ROOT)}")
