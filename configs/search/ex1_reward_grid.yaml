@@ -1,5 +1,5 @@
 base_config: configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
-output_dir: grid_result
+output_dir: configs/generated/reward_grid
 manifest_name: ex1_reward_grid_manifest.csv
 run_prefix: ex1_reward_grid
 

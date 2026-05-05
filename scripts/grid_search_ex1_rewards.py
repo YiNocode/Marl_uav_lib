@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional cap on the number of generated runs, useful for smoke tests.",
     )
+    parser.add_argument(
+        "--max-train-seeds",
+        type=int,
+        default=1,
+        help="Maximum number of training seeds to use from the search config for each reward setting.",
+    )
     return parser.parse_args()
 
 
@@ -399,6 +405,10 @@ def main() -> None:
     manifest_path = output_dir / manifest_name
 
     seeds = [int(x) for x in search_cfg.get("seeds", [int(base_cfg.get("seed", 42))])]
+    if args.max_train_seeds <= 0:
+        raise ValueError("--max-train-seeds must be positive.")
+    configured_seeds = list(seeds)
+    seeds = seeds[: args.max_train_seeds]
     eval_episodes = int(
         args.eval_episodes
         if args.eval_episodes is not None
@@ -448,6 +458,8 @@ def main() -> None:
                 "search_config": str(search_cfg_path.relative_to(ROOT)).replace("\\", "/"),
                 "base_config": base_config_rel,
                 "num_param_combos": len(combos),
+                "configured_seeds": configured_seeds,
+                "effective_seeds": seeds,
                 "num_seeds": len(seeds),
                 "total_runs": len(combos) * len(seeds),
                 "output_dir": output_dir_rel,
