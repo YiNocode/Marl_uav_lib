@@ -1061,8 +1061,57 @@ def _peek_checkpoint_actor_obs_dim(ckpt_path: Path) -> int | None:
         return None
 
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument(
+        "--config",
+        type=str,
+        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
+        help="Top-level experiment config path.",
+    )
+    p.add_argument("--seed", type=int, default=203, help="Base eval seed.")
+    p.add_argument(
+        "--train-seed",
+        type=int,
+        default=None,
+        help="Optional training seed used to resolve the checkpoint directory.",
+    )
+    p.add_argument("--num-seeds", type=int, default=1, help="Number of eval seeds.")
+    p.add_argument("--episodes", type=int, default=20, help="Episodes per eval seed.")
+    p.add_argument(
+        "--ckpt",
+        type=str,
+        default="",
+        help=(
+            "Optional explicit checkpoint path. By default eval loads "
+            "results/<exp_name>/checkpoints/<train_seed>/best.pt."
+        ),
+    )
+    return p.parse_args()
+
+
+def resolve_checkpoint_path(
+    *,
+    root: Path,
+    config_path: str,
+    train_seed: int,
+    ckpt_arg: str,
+) -> Path:
+    """Resolve checkpoint path without coupling it to eval rollout seed."""
+    if ckpt_arg:
+        ckpt_path = Path(ckpt_arg)
+        if not ckpt_path.is_absolute():
+            ckpt_path = root / ckpt_path
+        return ckpt_path
+
+    exp_name = Path(config_path).stem
+    ckpt_dir = root / "results" / exp_name / "checkpoints" / str(train_seed)
+    return ckpt_dir / "best.pt"
+
+
 def main() -> None:
     args = parse_args()
+    eval_seed = int(args.seed)
     root = Path(__file__).resolve().parents[1]
     exp_cfg_path = root / args.config
     exp_cfg = load_config(exp_cfg_path)
@@ -1072,12 +1121,13 @@ def main() -> None:
     model_cfg_path = root / exp_cfg.get("model", "configs/model/mlp.yaml")
     task_cfg: Dict[str, Any] = exp_cfg.get("task", {}) or {}
 
-    if args.ckpt:
-        ckpt_path = Path(args.ckpt)
-    else:
-        exp_name = Path(args.config).stem
-        ckpt_dir = root / "results" / exp_name / "checkpoints" / str(args.seed)
-        ckpt_path = ckpt_dir / "best.pt"
+    train_seed = int(args.train_seed) if args.train_seed is not None else int(exp_cfg.get("seed", args.seed))
+    ckpt_path = resolve_checkpoint_path(
+        root=root,
+        config_path=args.config,
+        train_seed=train_seed,
+        ckpt_arg=args.ckpt,
+    )
 
     if not ckpt_path.exists():
         raise FileNotFoundError(
@@ -1085,11 +1135,11 @@ def main() -> None:
         )
 
     # 构建环境 / 策略 / learner，并从 checkpoint 恢复参数
-    env = build_env(env_cfg_path, seed=args.seed, task_cfg=task_cfg)
+    env = build_env(env_cfg_path, seed=eval_seed, task_cfg=task_cfg)
     # 若环境还未初始化 obs_dim/state_dim，则在构建 policy 前先 reset 一次
     if getattr(env, "obs_dim", None) is None or getattr(env, "state_dim", None) is None:
         try:
-            env.reset(seed=args.seed)
+            env.reset(seed=eval_seed)
         except TypeError:
             # 兼容不接受 seed 参数的 reset 签名
             env.reset()
@@ -1105,9 +1155,9 @@ def main() -> None:
     ):
         compat_task_cfg = dict(task_cfg)
         compat_task_cfg["structure_obs_include_deltas"] = False
-        env = build_env(env_cfg_path, seed=args.seed, task_cfg=compat_task_cfg)
+        env = build_env(env_cfg_path, seed=eval_seed, task_cfg=compat_task_cfg)
         try:
-            env.reset(seed=args.seed)
+            env.reset(seed=eval_seed)
         except TypeError:
             env.reset()
         task_cfg = compat_task_cfg
@@ -1125,6 +1175,7 @@ def main() -> None:
     mac.policy = policy_core
 
     learner = build_learner(algo_cfg_path, policy_core)
+    args.seed = train_seed
 
     # checkpoint 路径：优先使用命令行
     # 默认：与 train.py 一致 -> results/<exp_name>/checkpoints/<seed>/best.pt
@@ -1140,10 +1191,22 @@ def main() -> None:
             f"Checkpoint not found: {ckpt_path}. 请先通过 train.py 训练并保存模型。"
         )
 
+    ckpt_path = resolve_checkpoint_path(
+        root=root,
+        config_path=args.config,
+        train_seed=train_seed,
+        ckpt_arg=args.ckpt,
+    )
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}.")
+
     state = load_checkpoint(ckpt_path, learner)
+    evader_speed = task_cfg.get("evader_speed")
+    speed_msg = f", task.evader_speed={float(evader_speed):.6g}" if evader_speed is not None else ""
+    args.seed = eval_seed
     print(
         f"Loaded checkpoint from {ckpt_path} "
-        f"(epoch={state.get('epoch')}, "
+        f"(train_seed={train_seed}{speed_msg}, epoch={state.get('epoch')}, "
         f"metric={state.get('metrics', {}).get('train/avg_return', 'N/A')})"
     )
 
@@ -1157,7 +1220,7 @@ def main() -> None:
         worker=worker,
         num_seeds=num_seeds,
         episodes_per_seed=episodes_per_seed,
-        base_seed=args.seed,
+        base_seed=eval_seed,
         record_trajectories=is_pe3v1,
     )
     metrics = compute_aggregate_metrics(all_records)
@@ -1170,7 +1233,7 @@ def main() -> None:
     results_dir = root / "results" / exp_name
     results_dir.mkdir(parents=True, exist_ok=True)
     # 与 checkpoints/<seed>/ 一致，文件名带种子便于区分不同 checkpoint 的评估输出
-    seed_tag = f"seed{args.seed}"
+    seed_tag = f"seed{eval_seed}"
     records_path = results_dir / f"eval_records_{seed_tag}.json"
     with open(records_path, "w", encoding="utf-8") as f:
         json.dump(all_records, f, indent=2, ensure_ascii=False)
@@ -1193,7 +1256,7 @@ def main() -> None:
         env=env,
         mac=mac,
         episodes=episodes_per_seed,
-        seed=args.seed,
+        seed=eval_seed,
     )
 
     # 3v1 追逃：用多种子评估中第一颗种子的轨迹画图

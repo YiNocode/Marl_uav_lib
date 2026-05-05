@@ -9,7 +9,7 @@ task:
   capture_dist: 1
   episode_limit: 1000
   pursuer_speed: 0.15
-  evader_speed: 0.1
+  evader_speed: 0.13
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -41,7 +41,7 @@ task:
   residual_control_gain: 0.1
   progress_gate_min_scale: 0.9
   role_progress_reward_scale: 1.0
-seed: 103
+seed: 101
 num_epochs: 12000
 rollout_steps: 256
 log_interval: 1

@@ -393,7 +393,7 @@ def main() -> None:
     base_cfg = load_yaml(base_config_path)
 
     run_prefix = str(search_cfg.get("run_prefix", "ex1_reward_grid")).strip() or "ex1_reward_grid"
-    output_dir_rel = str(search_cfg.get("output_dir", "configs/generated/reward_grid"))
+    output_dir_rel = str(search_cfg.get("output_dir", "grid_result"))
     output_dir = ROOT / output_dir_rel
     manifest_name = str(search_cfg.get("manifest_name", f"{run_prefix}_manifest.csv"))
     manifest_path = output_dir / manifest_name

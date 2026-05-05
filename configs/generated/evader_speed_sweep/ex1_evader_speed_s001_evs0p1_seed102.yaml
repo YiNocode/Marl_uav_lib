@@ -24,7 +24,7 @@ task:
   progress_dist_norm: 2.0
   structure_reward_scale: 0.18
   structure_improve_scale: 0.15
-  structure_hold_reward_scale: 0.03
+  structure_hold_reward_scale: 0.01
   structure_cov_weight: 1.0
   structure_col_weight: 1.2
   structure_ang_weight: 1.0
@@ -38,6 +38,9 @@ task:
   contraction_phase_compress_scale: 2.5
   manifold_contraction_rate: 0.012
   manifold_structure_gate_scale: 0.75
+  residual_control_gain: 0.1
+  progress_gate_min_scale: 0.9
+  role_progress_reward_scale: 1.0
 seed: 102
 num_epochs: 12000
 rollout_steps: 256
