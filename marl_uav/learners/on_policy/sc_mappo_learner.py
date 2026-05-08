@@ -36,6 +36,7 @@ class SCMAPPOLearner(MAPPOLearner):
         spatial_dim: int = 3,
         rels_from_end: bool = True,
         rels_start_idx: int | None = None,
+        minibatch_size: int = 0,
     ) -> None:
         super().__init__(
             policy=policy,
@@ -45,6 +46,7 @@ class SCMAPPOLearner(MAPPOLearner):
             entropy_coef=entropy_coef,
             max_grad_norm=max_grad_norm,
             num_epochs=num_epochs,
+            minibatch_size=minibatch_size,
         )
         self.dispersion_coef = float(dispersion_coef)
         self.num_pursuers = int(num_pursuers)

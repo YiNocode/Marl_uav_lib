@@ -53,6 +53,11 @@ class PyFlytAviaryBackend:
         - num_agents: 智能体 / UAV 数量
         - control_hz: 控制回路频率，必须整除 physics_hz
         - flight_mode: 通过 ``Aviary.set_mode`` 设置的飞控模式编号
+
+        Note:
+            ``render=False``（默认）为无窗口 / headless 仿真：PyFlyt 基于 PyBullet，
+            等价于不在 GUI 模式下运行（与直接使用 ``p.DIRECT`` 的语义一致）。训练与
+            吞吐基准请保持 ``render=False``。
         """
         if physics_hz % control_hz != 0:
             raise ValueError(

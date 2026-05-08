@@ -21,7 +21,7 @@ from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
 from marl_uav.runners.vecenv_trainer import VecEnvTrainer
 from marl_uav.utils.checkpoint import CheckpointManager
-from marl_uav.utils.config import load_config
+from marl_uav.utils.mp_context import default_vec_env_context
 from marl_uav.utils.env_action_bounds import boxed_action_bounds
 from marl_uav.utils.logger import Logger
 
@@ -176,6 +176,7 @@ def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]
     lr = float(cfg.get("lr", 3e-4))
     max_grad_norm = float(cfg.get("max_grad_norm", 0.5))
     num_epochs = int(cfg.get("epochs", 4))
+    minibatch_size = int(cfg.get("minibatch_size", 0))
 
     learner_kwargs = dict(
         lr=lr,
@@ -184,6 +185,7 @@ def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]
         entropy_coef=entropy_coef,
         max_grad_norm=max_grad_norm,
         num_epochs=num_epochs,
+        minibatch_size=minibatch_size,
     )
 
     if algo_name == "sc_mappo":
@@ -230,9 +232,10 @@ def main() -> None:
     num_envs = int(train_cfg.get("num_envs", 1))
     log_interval = int(train_cfg.get("log_interval", 1))
     eval_episodes = int(train_cfg.get("eval_episodes", 5))
-    vec_env_context = str(train_cfg.get("vec_env_context", "spawn"))
+    vec_env_context = str(train_cfg.get("vec_env_context") or default_vec_env_context())
     vec_env_shared_memory = bool(train_cfg.get("vec_env_shared_memory", True))
     vec_env_copy = bool(train_cfg.get("vec_env_copy", False))
+    profile_timing = bool(train_cfg.get("vec_env_profile_timing", False))
 
     task_cfg = train_cfg.get("task", {})
     env = build_env(env_cfg_path, seed=seed, task_cfg=task_cfg)
@@ -290,12 +293,15 @@ def main() -> None:
         )
 
     try:
-        train_metrics = trainer.run(
+        run_kw: dict[str, Any] = dict(
             num_epochs=num_epochs,
             rollout_steps=rollout_steps,
             seed=seed,
             log_interval=log_interval,
         )
+        if num_envs > 1:
+            run_kw["profile_timing"] = profile_timing
+        train_metrics = trainer.run(**run_kw)
     finally:
         if vec_env_manager is not None:
             vec_env_manager.close()

@@ -263,6 +263,7 @@ class VecEnvTrainer(BaseRunner):
         rollout_steps: int = 256,
         seed: int = 42,
         log_interval: int = 1,
+        profile_timing: bool = False,
     ) -> Dict[str, Any]:
         obs, state, avail_actions, _ = self.vec_env_manager.reset(seed=seed)
         num_envs, num_agents, obs_dim = obs.shape
@@ -292,17 +293,35 @@ class VecEnvTrainer(BaseRunner):
             )
 
             rollout_time = 0.0
+            policy_time = 0.0
+            vec_step_time = 0.0
+            value_boot_time = 0.0
             update_time = 0.0
             env_timing_totals: dict[str, float] = {}
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []
 
             for step in range(rollout_steps):
-                t0 = time.time()
-                actions, log_probs, values = self._select_actions(obs, state, avail_actions)
-                step_result = self.vec_env_manager.step(actions)
-                next_values = self._evaluate_values(step_result.gae_next_obs, step_result.gae_next_state)
-                next_values = next_values * (1.0 - step_result.terminated[:, None].astype(np.float32))
+                if profile_timing:
+                    t_roll0 = time.perf_counter()
+                    tp0 = time.perf_counter()
+                    actions, log_probs, values = self._select_actions(obs, state, avail_actions)
+                    policy_time += time.perf_counter() - tp0
+                    ts0 = time.perf_counter()
+                    step_result = self.vec_env_manager.step(actions)
+                    vec_step_time += time.perf_counter() - ts0
+                    tv0 = time.perf_counter()
+                    next_values = self._evaluate_values(step_result.gae_next_obs, step_result.gae_next_state)
+                    next_values = next_values * (1.0 - step_result.terminated[:, None].astype(np.float32))
+                    value_boot_time += time.perf_counter() - tv0
+                    rollout_time += time.perf_counter() - t_roll0
+                else:
+                    t0 = time.time()
+                    actions, log_probs, values = self._select_actions(obs, state, avail_actions)
+                    step_result = self.vec_env_manager.step(actions)
+                    next_values = self._evaluate_values(step_result.gae_next_obs, step_result.gae_next_state)
+                    next_values = next_values * (1.0 - step_result.terminated[:, None].astype(np.float32))
+                    rollout_time += time.time() - t0
 
                 buffer.add(
                     step,
@@ -318,7 +337,6 @@ class VecEnvTrainer(BaseRunner):
                     next_values=next_values,
                     avail_actions=avail_actions,
                 )
-                rollout_time += time.time() - t0
                 self._aggregate_timing(step_result.infos, env_timing_totals)
                 self._update_tb_trackers(step_result.infos, num_envs)
 
@@ -415,6 +433,17 @@ class VecEnvTrainer(BaseRunner):
                     f"episodes={len(epoch_lens)} env_steps={rollout_steps * num_envs}"
                     f"{timing_msg}"
                 )
+                if profile_timing:
+                    steps_den = max(rollout_steps * num_envs, 1)
+                    epoch_wall = rollout_time + update_time
+                    rollout_frac = rollout_time / max(epoch_wall, 1e-9)
+                    print(
+                        f"[vec-profile] ms/env_step: policy={1000.0 * policy_time / steps_den:.3f} "
+                        f"vec_env_ipc={1000.0 * vec_step_time / steps_den:.3f} "
+                        f"bootstrap_V={1000.0 * value_boot_time / steps_den:.3f} "
+                        f"ppo_update={update_ms_per_env_step:.3f} "
+                        f"rollout_frac_of_epoch={rollout_frac:.3f}"
+                    )
 
         return {
             "train/num_epochs": int(num_epochs),

@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from marl_uav.data.batch import Batch
-
-
-@dataclass
-class VecRolloutBatch:
-    batch: EpisodeBatch
-    episode_returns: np.ndarray
-    episode_lengths: np.ndarray
-    completed_episodes: int
 
 
 class VecRolloutBuffer:
@@ -111,17 +102,21 @@ class VecRolloutBuffer:
         self.returns = self.advantages + self.values
 
     def as_batch(self) -> Batch:
+        def te_first_contig(x: np.ndarray) -> np.ndarray:
+            # Env-major (B=E,T,...) for learner; ensure C-contiguous after transpose.
+            return np.ascontiguousarray(np.swapaxes(x, 0, 1))
+
         data: dict[str, Any] = {
-            "obs": np.swapaxes(self.obs, 0, 1),
-            "state": np.swapaxes(self.state, 0, 1),
-            "actions": np.swapaxes(self.actions, 0, 1),
-            "rewards": np.swapaxes(self.rewards, 0, 1),
-            "dones": np.swapaxes(self.dones, 0, 1),
-            "log_probs": np.swapaxes(self.log_probs, 0, 1),
-            "values": np.swapaxes(self.values, 0, 1),
-            "advantages": np.swapaxes(self.advantages, 0, 1),
-            "returns": np.swapaxes(self.returns, 0, 1),
+            "obs": te_first_contig(self.obs),
+            "state": te_first_contig(self.state),
+            "actions": te_first_contig(self.actions),
+            "rewards": te_first_contig(self.rewards),
+            "dones": te_first_contig(self.dones),
+            "log_probs": te_first_contig(self.log_probs),
+            "values": te_first_contig(self.values),
+            "advantages": te_first_contig(self.advantages),
+            "returns": te_first_contig(self.returns),
         }
         if self.avail_actions is not None:
-            data["avail_actions"] = np.swapaxes(self.avail_actions, 0, 1)
+            data["avail_actions"] = te_first_contig(self.avail_actions)
         return Batch(**data)

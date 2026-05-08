@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import random
 from typing import Any, Dict, Mapping
 
 import numpy as np
 import torch
 from torch import nn
-import json
 from torch.optim import Adam
 from torch.nn.utils import clip_grad_norm_
 
 from marl_uav.data.batch import Batch
 from marl_uav.learners.base_learner import BaseLearner
+from marl_uav.learners.tensor_utils import tensor_from_numpy_on_device
 from marl_uav.policies.actor_critic_policy import ActorCriticPolicy
 
 
@@ -29,6 +30,7 @@ class IPPOLearner(BaseLearner):
         entropy_coef: float = 0.01,
         max_grad_norm: float = 0.5,
         num_epochs: int = 4,
+        minibatch_size: int = 0,
     ) -> None:
         self.policy = policy
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
@@ -37,6 +39,7 @@ class IPPOLearner(BaseLearner):
         self.entropy_coef = float(entropy_coef)
         self.max_grad_norm = float(max_grad_norm)
         self.num_epochs = int(num_epochs)
+        self.minibatch_size = int(minibatch_size)
 
     @property
     def device(self) -> torch.device:
@@ -70,6 +73,9 @@ class IPPOLearner(BaseLearner):
         advantages = np.asarray(batch.advantages)  # (T, N) 或 (B, T, N)
         returns = np.asarray(batch.returns)  # (T, N) 或 (B, T, N)
         avail_actions_arr = getattr(batch, "avail_actions", None)
+        state_arr = getattr(batch, "state", None)
+        if state_arr is not None:
+            state_arr = np.asarray(state_arr)
 
         # 兼容 EpisodeBatch: (B, T, N, ...) -> (B*T, N, ...)
         if obs.ndim == 4:
@@ -89,38 +95,20 @@ class IPPOLearner(BaseLearner):
                 if aa.ndim == 4 and aa.shape[0] == B and aa.shape[1] == T:
                     aa = aa.reshape(B * T, N, aa.shape[-1])
                 avail_actions_arr = aa
+            if state_arr is not None and state_arr.ndim == 3:
+                state_arr = state_arr.reshape(B * T, state_arr.shape[-1])
 
         T, N = obs.shape[0], obs.shape[1]
         batch_size = T * N
-        is_continuous = getattr(self.policy, "action_space_type", "discrete") == "continuous"
 
-        obs_flat = self._flatten_time_agent(obs)  # (T*N, D)
-        # 连续动作不转为 long，且保持 (T*N, action_dim)
-        if is_continuous:
-            actions_flat = torch.as_tensor(
-                actions.reshape(batch_size, -1), dtype=torch.float32, device=self.device
-            )
-        else:
-            actions_flat = torch.as_tensor(
-                actions.reshape(batch_size), dtype=torch.long, device=self.device
-            )
-        old_log_probs_flat = torch.as_tensor(
-            old_log_probs.reshape(batch_size), dtype=torch.float32, device=self.device
-        )
-        advantages_flat = torch.as_tensor(
-            advantages.reshape(batch_size), dtype=torch.float32, device=self.device
-        )
-        returns_flat = torch.as_tensor(
-            returns.reshape(batch_size), dtype=torch.float32, device=self.device
-        )
+        mb_target = self.minibatch_size if self.minibatch_size > 0 else batch_size
+        mb_t = max(1, (mb_target + N - 1) // N)
+        chunk_starts = list(range(0, T, mb_t))
 
-        # 归一化 advantage
-        adv_mean = advantages_flat.mean()
-        adv_std = advantages_flat.std(unbiased=False) + 1e-8
-        advantages_flat = (advantages_flat - adv_mean) / adv_std
-
-        # 由于 ActorCriticPolicy.evaluate_actions 接受形状 (T, N, D)/(T, N)
-        # 这里直接传原始 np 数组即可，让策略负责转换
+        adv_np = advantages.astype(np.float64).reshape(-1)
+        adv_mean = float(adv_np.mean())
+        adv_std = float(adv_np.std()) + 1e-8
+        advantages = ((advantages - adv_mean) / adv_std).astype(np.float32, copy=False)
 
         total_policy_loss = 0.0
         total_value_loss = 0.0
@@ -128,93 +116,84 @@ class IPPOLearner(BaseLearner):
         last_approx_kl = 0.0
         last_clip_fraction = 0.0
         last_grad_norm = 0.0
+        n_mb_updates = 0
+
+        use_state = state_arr is not None and getattr(self.policy, "state_dim", None) is not None
 
         for _ in range(self.num_epochs):
-            # 重新计算当前策略下的 log_probs / entropy / values
-            # new_log_probs, entropy, values = self.policy.evaluate_actions(
-            #     obs=obs, actions=actions
-            # )
-            state = getattr(batch, "state", None)
             avail_actions = avail_actions_arr
+            random.shuffle(chunk_starts)
+            for cs in chunk_starts:
+                sl = slice(cs, min(cs + mb_t, T))
+                obs_c = obs[sl]
+                actions_c = actions[sl]
+                old_lp_c = old_log_probs[sl]
+                adv_c = advantages[sl].reshape(-1)
+                ret_c = returns[sl].reshape(-1)
+                avail_c = None if avail_actions is None else np.asarray(avail_actions)[sl]
+                state_c = state_arr[sl] if use_state else None
 
-            # region agent log: confirm whether state is passed to policy
-            try:
-                log_entry = {
-                    "sessionId": "cd6433",
-                    "runId": "pre-fix",
-                    "hypothesisId": "ippo_state_pass",
-                    "location": "ippo_learner.py:update",
-                    "message": "Evaluate actions inputs",
-                    "data": {
-                        "policy_state_dim": getattr(self.policy, "state_dim", None),
-                        "state_is_none": state is None,
-                        "has_avail_actions": avail_actions is not None,
-                    },
-                    "timestamp": int(__import__("time").time() * 1000),
-                }
+                adv_c_t = tensor_from_numpy_on_device(adv_c, self.device)
+                ret_c_t = tensor_from_numpy_on_device(ret_c, self.device)
+                csz = obs_c.shape[0] * N
+                old_lp_c_t = tensor_from_numpy_on_device(
+                    old_lp_c.reshape(-1), self.device
+                )
 
-            except Exception:
-                pass
-            # endregion
+                new_log_probs, entropy, values = self.policy.evaluate_actions(
+                    obs=obs_c,
+                    actions=actions_c,
+                    state=state_c,
+                    avail_actions=avail_c,
+                )
+                new_log_probs_flat = new_log_probs.reshape(csz).to(self.device)
+                entropy_flat = entropy.reshape(csz).to(self.device)
+                values_flat = values.reshape(csz).to(self.device)
 
-            # IPPO 默认不使用全局 state（critic 使用 obs），只有在 policy 明确支持 state_dim 时才传入
-            if getattr(self.policy, "state_dim", None) is None:
-                state = None
+                ratio = torch.exp(new_log_probs_flat - old_lp_c_t)
+                clipped_ratio = torch.clamp(
+                    ratio, 1.0 - self.clip_range, 1.0 + self.clip_range
+                )
+                clipped = (ratio != clipped_ratio).float().mean().item()
+                approx_kl = 0.5 * float(((new_log_probs_flat - old_lp_c_t) ** 2).mean().item())
 
-            new_log_probs, entropy, values = self.policy.evaluate_actions(
-                obs=obs,
-                actions=actions,
-                state=state,
-                avail_actions=avail_actions,
-            )
-            new_log_probs_flat = new_log_probs.reshape(batch_size).to(self.device)
-            entropy_flat = entropy.reshape(batch_size).to(self.device)
-            values_flat = values.reshape(batch_size).to(self.device)
+                surr1 = ratio * adv_c_t
+                surr2 = clipped_ratio * adv_c_t
+                policy_loss = -torch.mean(torch.min(surr1, surr2))
 
-            # PPO ratio
-            ratio = torch.exp(new_log_probs_flat - old_log_probs_flat)
-            clipped_ratio = torch.clamp(
-                ratio, 1.0 - self.clip_range, 1.0 + self.clip_range
-            )
-            clipped = (ratio != clipped_ratio).float().mean().item()
-            approx_kl = 0.5 * ((new_log_probs_flat - old_log_probs_flat) ** 2).mean().item()
+                value_loss = 0.5 * torch.mean((ret_c_t - values_flat) ** 2)
+                entropy_mean = torch.mean(entropy_flat)
 
-            surr1 = ratio * advantages_flat
-            surr2 = clipped_ratio * advantages_flat
-            policy_loss = -torch.mean(torch.min(surr1, surr2))
+                loss = (
+                    policy_loss
+                    + self.value_coef * value_loss
+                    - self.entropy_coef * entropy_mean
+                )
 
-            value_loss = 0.5 * torch.mean((returns_flat - values_flat) ** 2)
-            entropy_mean = torch.mean(entropy_flat)
+                self.optimizer.zero_grad()
+                loss.backward()
+                grad_norm = 0.0
+                for p in self.policy.parameters():
+                    if p.grad is not None:
+                        grad_norm += p.grad.data.norm(2).item() ** 2
+                grad_norm = grad_norm**0.5
+                if self.max_grad_norm is not None and self.max_grad_norm > 0:
+                    clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                self.optimizer.step()
 
-            loss = (
-                policy_loss
-                + self.value_coef * value_loss
-                - self.entropy_coef * entropy_mean
-            )
+                total_policy_loss += float(policy_loss.item())
+                total_value_loss += float(value_loss.item())
+                total_entropy += float(entropy_mean.item())
+                last_approx_kl = approx_kl
+                last_clip_fraction = clipped
+                last_grad_norm = grad_norm
+                n_mb_updates += 1
 
-            self.optimizer.zero_grad()
-            loss.backward()
-            grad_norm = 0.0
-            for p in self.policy.parameters():
-                if p.grad is not None:
-                    grad_norm += p.grad.data.norm(2).item() ** 2
-            grad_norm = grad_norm ** 0.5
-            if self.max_grad_norm is not None and self.max_grad_norm > 0:
-                clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-            self.optimizer.step()
-
-            total_policy_loss += float(policy_loss.item())
-            total_value_loss += float(value_loss.item())
-            total_entropy += float(entropy_mean.item())
-            last_approx_kl = approx_kl
-            last_clip_fraction = clipped
-            last_grad_norm = grad_norm
-
-        num_updates = float(self.num_epochs)
+        denom = max(float(n_mb_updates), 1.0)
         return {
-            "loss/policy_loss": total_policy_loss / num_updates,
-            "loss/value_loss": total_value_loss / num_updates,
-            "loss/entropy": total_entropy / num_updates,
+            "loss/policy_loss": total_policy_loss / denom,
+            "loss/value_loss": total_value_loss / denom,
+            "loss/entropy": total_entropy / denom,
             "train/approx_kl": last_approx_kl,
             "train/clip_fraction": last_clip_fraction,
             "train/grad_norm": last_grad_norm,
@@ -236,6 +215,7 @@ class IPPOLearner(BaseLearner):
                 "entropy_coef": self.entropy_coef,
                 "max_grad_norm": self.max_grad_norm,
                 "num_epochs": self.num_epochs,
+                "minibatch_size": self.minibatch_size,
             },
         }
 

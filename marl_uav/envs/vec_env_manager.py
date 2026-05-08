@@ -11,6 +11,7 @@ from gymnasium import Env, spaces
 from gymnasium.vector import AsyncVectorEnv, AutoresetMode
 
 from marl_uav.envs.factories import build_env_from_config
+from marl_uav.utils.mp_context import default_vec_env_context
 
 
 def _box_like(shape: tuple[int, ...], *, low: float = -np.inf, high: float = np.inf) -> spaces.Box:
@@ -134,12 +135,14 @@ class VecEnvManager:
         task_cfg: dict[str, Any] | None,
         num_envs: int,
         seed: int,
-        context: str = "spawn",
+        context: str | None = None,
         shared_memory: bool = True,
         copy: bool = False,
     ) -> None:
         if num_envs <= 0:
             raise ValueError("num_envs must be positive.")
+
+        mp_context = context if context is not None else default_vec_env_context()
 
         self.num_envs = int(num_envs)
         self.base_seed = int(seed)
@@ -151,7 +154,7 @@ class VecEnvManager:
             env_fns,
             shared_memory=shared_memory,
             copy=copy,
-            context=context,
+            context=mp_context,
             autoreset_mode=AutoresetMode.SAME_STEP,
         )
         self.single_observation_space = self._vec_env.single_observation_space
@@ -162,6 +165,11 @@ class VecEnvManager:
         return self._vec_env.single_action_space
 
     def reset(self, seed: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, dict[str, Any]]:
+        """Collect observations from all workers.
+
+        ``AsyncVectorEnv.reset`` waits until every subprocess has finished resetting,
+        so slow envs block the whole vector step (barrier); avoid frequent resets in benchmarks.
+        """
         base_seed = self.base_seed if seed is None else int(seed)
         seed_list = [base_seed + env_idx for env_idx in range(self.num_envs)]
         obs_dict, infos = self._vec_env.reset(seed=seed_list)
