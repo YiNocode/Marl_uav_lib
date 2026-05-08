@@ -23,6 +23,7 @@ from marl_uav.runners.trainer import Trainer
 from marl_uav.runners.vecenv_trainer import VecEnvTrainer
 from marl_uav.utils.checkpoint import CheckpointManager
 from marl_uav.utils.config import load_config
+from marl_uav.utils.device import resolve_train_device
 from marl_uav.utils.mp_context import default_vec_env_context
 from marl_uav.utils.torch_threading import configure_torch_threads
 from marl_uav.utils.env_action_bounds import boxed_action_bounds
@@ -259,7 +260,12 @@ def main() -> None:
     tb_log_dir = results_dir / "tb_" / str(seed)
     tb_logger = Logger(log_dir=tb_log_dir)
 
+    train_device = resolve_train_device(train_cfg)
+    print(f"[train] device={train_device} (policy/learner on this device)")
+
     policy_core = build_policy(model_cfg_path, env, algo_cfg_path)
+    policy_core = policy_core.to(train_device)
+
     n_actions_for_mac = (
         env.n_actions
         if getattr(policy_core, "action_space_type", "discrete") == "discrete"

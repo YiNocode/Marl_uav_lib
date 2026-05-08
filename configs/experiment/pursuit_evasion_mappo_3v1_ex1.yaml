@@ -47,6 +47,7 @@ task:
 
 seed: 100
 num_epochs: 30000
+# device: auto   # auto=有 CUDA 则用 GPU，否则 MPS/CPU；也可写 cuda、cuda:0、cpu
 # PPO batch：优先保持 num_envs 在 8–16，用 rollout_steps 2048–4096 拉高总样本（约 16k–64k env steps/epoch）
 rollout_steps: 2048
 num_envs: 8
