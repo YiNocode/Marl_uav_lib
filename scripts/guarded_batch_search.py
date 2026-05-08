@@ -21,6 +21,7 @@ from monitor_training_run import TrainingMonitor
 
 DEFAULT_GRID_CFG = ROOT / "configs" / "search" / "ex1_reward_grid.yaml"
 DEFAULT_SPEED_CFG = ROOT / "configs" / "search" / "ex1_evader_speed_sweep.yaml"
+DEFAULT_ROLLOUT_STEPS = 1024
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,6 +108,16 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "results" / "guarded_batch_runs",
         help="Directory for guardian logs and summaries.",
     )
+    parser.add_argument(
+        "--rollout-steps",
+        type=int,
+        default=DEFAULT_ROLLOUT_STEPS,
+        help=(
+            "Override train config rollout_steps for each guarded run "
+            f"(default {DEFAULT_ROLLOUT_STEPS}). "
+            "Materialized as run_dir/train_config.yaml before invoking train.py."
+        ),
+    )
     parser.add_argument("--min-rollout-fps", type=float, default=20.0)
     parser.add_argument("--max-rollout-ms-per-step", type=float, default=50.0)
     parser.add_argument("--max-update-ms-per-step", type=float, default=10.0)
@@ -188,6 +199,22 @@ def run_logged_command(command: list[str], *, log_path: Path) -> int:
     return proc.returncode
 
 
+def materialize_train_config_with_rollout(
+    *,
+    source_relpath: str,
+    run_dir: Path,
+    rollout_steps: int,
+) -> str:
+    """Copy manifest train YAML into run_dir with rollout_steps overridden; return path relative to ROOT."""
+    src = ROOT / source_relpath
+    cfg = load_yaml(src)
+    cfg["rollout_steps"] = int(rollout_steps)
+    out_path = run_dir / "train_config.yaml"
+    with open(out_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+    return out_path.relative_to(ROOT).as_posix()
+
+
 def make_monitor_args(args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
         min_rollout_fps=float(args.min_rollout_fps),
@@ -205,13 +232,18 @@ def run_monitored_training(
     args: argparse.Namespace,
     config_relpath: str,
     run_dir: Path,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, dict[str, Any], str]:
+    train_cfg_relpath = materialize_train_config_with_rollout(
+        source_relpath=config_relpath,
+        run_dir=run_dir,
+        rollout_steps=int(args.rollout_steps),
+    )
     command = [
         args.python,
         "-u",
         str(ROOT / "scripts" / "train.py"),
         "--train-config",
-        config_relpath,
+        train_cfg_relpath,
     ]
     proc = subprocess.Popen(
         command,
@@ -246,7 +278,7 @@ def run_monitored_training(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    return return_code, summary
+    return return_code, summary, train_cfg_relpath
 
 
 def run_eval(
@@ -324,7 +356,7 @@ def main() -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n=== Guarded Run {idx}/{len(manifest_rows)}: {run_name} ===")
-        train_rc, monitor_summary = run_monitored_training(
+        train_rc, monitor_summary, train_cfg_effective = run_monitored_training(
             args=args,
             config_relpath=config_relpath,
             run_dir=run_dir,
@@ -334,6 +366,8 @@ def main() -> None:
             "run_name": run_name,
             "index": idx,
             "config_relpath": config_relpath,
+            "rollout_steps": int(args.rollout_steps),
+            "train_config_effective": train_cfg_effective,
             "seed": int(row.get("seed", 0)),
             "train_return_code": int(train_rc),
             "monitor_alerts": int(monitor_summary.get("num_alerts", 0)),
