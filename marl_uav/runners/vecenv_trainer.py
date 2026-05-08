@@ -15,6 +15,40 @@ if TYPE_CHECKING:
     from marl_uav.utils.checkpoint import CheckpointManager
     from marl_uav.utils.logger import Logger
 
+# 与 RolloutWorker 中 pursuit_structure 尾部均值窗口一致
+_PE_STRUCTURE_TAIL_STEPS = 30
+
+
+def _vec_info_pick(infos: dict[str, Any], key: str, env_idx: int) -> Any:
+    """从 AsyncVectorEnv 返回的 infos 中取第 env_idx 个子环境的标量/对象。"""
+    if key not in infos:
+        return None
+    v = infos[key]
+    if isinstance(v, np.ndarray):
+        if v.dtype == object:
+            return v.flat[env_idx] if v.size > env_idx else None
+        return v[env_idx]
+    if isinstance(v, (list, tuple)):
+        return v[env_idx] if len(v) > env_idx else None
+    return v
+
+
+def _vec_info_float(infos: dict[str, Any], key: str, env_idx: int, default: float = 0.0) -> float:
+    x = _vec_info_pick(infos, key, env_idx)
+    if x is None:
+        return default
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+
+def _vec_info_bool(infos: dict[str, Any], key: str, env_idx: int) -> bool:
+    x = _vec_info_pick(infos, key, env_idx)
+    if x is None:
+        return False
+    return bool(x)
+
 
 class VecEnvTrainer(BaseRunner):
     """Collect batched rollouts with AsyncVectorEnv and update PPO on flattened batches."""
@@ -91,6 +125,110 @@ class VecEnvTrainer(BaseRunner):
             else:
                 env_timing_totals[key] = env_timing_totals.get(key, 0.0) + float(arr[mask].sum())
 
+    def _reset_tb_trackers(self, num_envs: int) -> None:
+        self._ep_any_capture = np.zeros(num_envs, dtype=np.bool_)
+        self._ep_any_collision = np.zeros(num_envs, dtype=np.bool_)
+        self._ep_any_pursuer_oob = np.zeros(num_envs, dtype=np.bool_)
+        self._ep_any_timeout = np.zeros(num_envs, dtype=np.bool_)
+        self._ep_any_obstacle_term = np.zeros(num_envs, dtype=np.bool_)
+        self._ep_first_capture_step = np.full(num_envs, -1, dtype=np.int32)
+        self._ep_mgd_sum = np.zeros((num_envs,), dtype=np.float64)
+        self._ep_prog_sum = np.zeros((num_envs,), dtype=np.float64)
+        self._ep_time_penalty_sum = np.zeros((num_envs,), dtype=np.float64)
+        self._ep_reach_bonus_sum = np.zeros((num_envs,), dtype=np.float64)
+        self._ep_collision_penalty_sum = np.zeros((num_envs,), dtype=np.float64)
+        self._ep_ps_pairs: list[list[tuple[float, float]]] = [[] for _ in range(num_envs)]
+        self._tb_episode_idx = 0
+
+    def _update_tb_trackers(self, infos: dict[str, Any], num_envs: int) -> None:
+        for e in range(num_envs):
+            if _vec_info_bool(infos, "captured", e):
+                self._ep_any_capture[e] = True
+            if _vec_info_bool(infos, "has_collision", e):
+                self._ep_any_collision[e] = True
+            if _vec_info_bool(infos, "pursuer_oob", e):
+                self._ep_any_pursuer_oob[e] = True
+            if _vec_info_bool(infos, "timeout", e):
+                self._ep_any_timeout[e] = True
+            if _vec_info_bool(infos, "obstacle_terminated", e):
+                self._ep_any_obstacle_term[e] = True
+            cs = _vec_info_pick(infos, "capture_step", e)
+            if self._ep_first_capture_step[e] < 0 and cs is not None:
+                try:
+                    csi = int(cs)
+                    if csi >= 0:
+                        self._ep_first_capture_step[e] = csi
+                except (TypeError, ValueError):
+                    pass
+            self._ep_mgd_sum[e] += _vec_info_float(infos, "mean_goal_distance", e, 0.0)
+            self._ep_prog_sum[e] += _vec_info_float(infos, "reward_progress", e, 0.0)
+            self._ep_time_penalty_sum[e] += _vec_info_float(infos, "reward_time_penalty", e, 0.0)
+            self._ep_reach_bonus_sum[e] += _vec_info_float(infos, "reward_reach_bonus", e, 0.0)
+            self._ep_collision_penalty_sum[e] += _vec_info_float(infos, "reward_collision_penalty", e, 0.0)
+            ps = _vec_info_pick(infos, "pursuit_structure", e)
+            if isinstance(ps, dict) and "C_cov" in ps and "C_col" in ps:
+                self._ep_ps_pairs[e].append((float(ps["C_cov"]), float(ps["C_col"])))
+
+    def _clear_tb_trackers_env(self, env_idx: int) -> None:
+        self._ep_any_capture[env_idx] = False
+        self._ep_any_collision[env_idx] = False
+        self._ep_any_pursuer_oob[env_idx] = False
+        self._ep_any_timeout[env_idx] = False
+        self._ep_any_obstacle_term[env_idx] = False
+        self._ep_first_capture_step[env_idx] = -1
+        self._ep_mgd_sum[env_idx] = 0.0
+        self._ep_prog_sum[env_idx] = 0.0
+        self._ep_time_penalty_sum[env_idx] = 0.0
+        self._ep_reach_bonus_sum[env_idx] = 0.0
+        self._ep_collision_penalty_sum[env_idx] = 0.0
+        self._ep_ps_pairs[env_idx].clear()
+
+    def _log_tb_episode(self, env_idx: int, ep_ret: float, ep_len: int, infos: dict[str, Any]) -> None:
+        if self.logger is None or ep_len <= 0:
+            return
+        last_reached = _vec_info_bool(infos, "all_reached", env_idx)
+        last_oob = _vec_info_bool(infos, "out_of_bounds", env_idx)
+        last_col = _vec_info_bool(infos, "has_collision", env_idx)
+        last_cap = _vec_info_bool(infos, "captured", env_idx)
+        last_p_oob = _vec_info_bool(infos, "pursuer_oob", env_idx)
+        last_to = _vec_info_bool(infos, "timeout", env_idx)
+        last_obs_term = _vec_info_bool(infos, "obstacle_terminated", env_idx)
+        success = bool(last_reached)
+        collision = bool(self._ep_any_collision[env_idx] or last_col)
+        capture = bool(self._ep_any_capture[env_idx] or last_cap)
+        pursuer_oob = bool(self._ep_any_pursuer_oob[env_idx] or last_p_oob)
+        timeout = bool(self._ep_any_timeout[env_idx] or last_to)
+        obs_term = bool(self._ep_any_obstacle_term[env_idx] or last_obs_term)
+        train_metrics: dict[str, float] = {
+            "episode_return": float(ep_ret),
+            "episode_length": float(ep_len),
+            "success_rate": 1.0 if success else 0.0,
+            "out_of_bounds_rate": 1.0 if last_oob else 0.0,
+            "collision_rate": 1.0 if collision else 0.0,
+            "capture_rate": 1.0 if capture else 0.0,
+            "timeout_rate": 1.0 if timeout else 0.0,
+            "pursuer_oob_rate": 1.0 if pursuer_oob else 0.0,
+            "obstacle_termination_rate": 1.0 if obs_term else 0.0,
+        }
+        self.logger.log_train_env_metrics(train_metrics, step=self._tb_episode_idx)
+        env_metrics: dict[str, float] = {}
+        mgd_mean = float(self._ep_mgd_sum[env_idx] / max(ep_len, 1))
+        env_metrics["mean_goal_distance"] = mgd_mean
+        env_metrics["final_goal_distance"] = _vec_info_float(infos, "mean_goal_distance", env_idx, mgd_mean)
+        env_metrics["reward_progress"] = float(self._ep_prog_sum[env_idx])
+        env_metrics["reward_time_penalty"] = float(self._ep_time_penalty_sum[env_idx])
+        env_metrics["reward_reach_bonus"] = float(self._ep_reach_bonus_sum[env_idx])
+        env_metrics["reward_collision_penalty"] = float(self._ep_collision_penalty_sum[env_idx])
+        pairs = self._ep_ps_pairs[env_idx]
+        if pairs:
+            tail = pairs[-_PE_STRUCTURE_TAIL_STEPS:]
+            covs = np.array([p[0] for p in tail], dtype=np.float64)
+            cols = np.array([p[1] for p in tail], dtype=np.float64)
+            env_metrics["mean_C_cov"] = float(np.mean(covs))
+            env_metrics["mean_C_col"] = float(np.mean(cols))
+        self.logger.log_env_diagnostics(env_metrics, step=self._tb_episode_idx)
+        self._tb_episode_idx += 1
+
     def _call_learner(self, batch: Any) -> Dict[str, Any]:
         if hasattr(self.learner, "update"):
             return getattr(self.learner, "update")(batch)
@@ -117,6 +255,7 @@ class VecEnvTrainer(BaseRunner):
         total_env_steps = 0
         episode_returns = np.zeros((num_envs,), dtype=np.float32)
         episode_lengths = np.zeros((num_envs,), dtype=np.int32)
+        self._reset_tb_trackers(num_envs)
 
         for epoch in range(num_epochs):
             buffer = VecRolloutBuffer(
@@ -159,6 +298,7 @@ class VecEnvTrainer(BaseRunner):
                 )
                 rollout_time += time.time() - t0
                 self._aggregate_timing(step_result.infos, env_timing_totals)
+                self._update_tb_trackers(step_result.infos, num_envs)
 
                 episode_returns += step_result.rewards.sum(axis=1)
                 episode_lengths += 1
@@ -166,6 +306,13 @@ class VecEnvTrainer(BaseRunner):
                 for env_idx in done_envs:
                     epoch_returns.append(float(episode_returns[env_idx]))
                     epoch_lens.append(int(episode_lengths[env_idx]))
+                    self._log_tb_episode(
+                        env_idx,
+                        float(episode_returns[env_idx]),
+                        int(episode_lengths[env_idx]),
+                        step_result.infos,
+                    )
+                    self._clear_tb_trackers_env(env_idx)
                     episode_returns[env_idx] = 0.0
                     episode_lengths[env_idx] = 0
 
