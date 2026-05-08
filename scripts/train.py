@@ -151,6 +151,19 @@ def build_policy(
     )
 
 
+def resolve_train_results_dir(root: Path, train_cfg: dict[str, Any], train_config_arg: str) -> Path:
+    """Root directory for TensorBoard logs and checkpoints.
+
+    If ``train_results_dir`` is set in the train YAML, use it (relative to repo root or absolute).
+    Otherwise ``results/<stem(train-config)>`` (legacy behaviour).
+    """
+    override = train_cfg.get("train_results_dir")
+    if not override:
+        return root / "results" / Path(train_config_arg).stem
+    p = Path(str(override))
+    return p.resolve() if p.is_absolute() else (root / p).resolve()
+
+
 def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]]:
     cfg = load_config(algo_cfg_path)
     algo_name = cfg.get("algo", "ippo").lower()
@@ -230,8 +243,7 @@ def main() -> None:
         except TypeError:
             env.reset()
 
-    exp_name = Path(args.train_config).stem
-    results_dir = root / "results" / exp_name
+    results_dir = resolve_train_results_dir(root, train_cfg, args.train_config)
     tb_log_dir = results_dir / "tb_" / str(seed)
     tb_logger = Logger(log_dir=tb_log_dir)
 

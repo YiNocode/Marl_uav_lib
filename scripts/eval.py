@@ -1096,6 +1096,7 @@ def resolve_checkpoint_path(
     config_path: str,
     train_seed: int,
     ckpt_arg: str,
+    exp_cfg: Dict[str, Any] | None = None,
 ) -> Path:
     """Resolve checkpoint path without coupling it to eval rollout seed."""
     if ckpt_arg:
@@ -1103,6 +1104,13 @@ def resolve_checkpoint_path(
         if not ckpt_path.is_absolute():
             ckpt_path = root / ckpt_path
         return ckpt_path
+
+    cfg = exp_cfg or load_config(root / config_path)
+    trd = cfg.get("train_results_dir")
+    if trd:
+        p = Path(str(trd))
+        base = p.resolve() if p.is_absolute() else (root / p).resolve()
+        return base / "checkpoints" / str(train_seed) / "best.pt"
 
     exp_name = Path(config_path).stem
     ckpt_dir = root / "results" / exp_name / "checkpoints" / str(train_seed)
@@ -1127,6 +1135,7 @@ def main() -> None:
         config_path=args.config,
         train_seed=train_seed,
         ckpt_arg=args.ckpt,
+        exp_cfg=exp_cfg,
     )
 
     if not ckpt_path.exists():
@@ -1177,29 +1186,6 @@ def main() -> None:
     learner = build_learner(algo_cfg_path, policy_core)
     args.seed = train_seed
 
-    # checkpoint 路径：优先使用命令行
-    # 默认：与 train.py 一致 -> results/<exp_name>/checkpoints/<seed>/best.pt
-    if args.ckpt:
-        ckpt_path = Path(args.ckpt)
-    else:
-        exp_name = Path(args.config).stem
-        ckpt_dir = root / "results" / exp_name / "checkpoints" / str(args.seed)
-        ckpt_path = ckpt_dir / "best.pt"
-
-    if not ckpt_path.exists():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {ckpt_path}. 请先通过 train.py 训练并保存模型。"
-        )
-
-    ckpt_path = resolve_checkpoint_path(
-        root=root,
-        config_path=args.config,
-        train_seed=train_seed,
-        ckpt_arg=args.ckpt,
-    )
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}.")
-
     state = load_checkpoint(ckpt_path, learner)
     evader_speed = task_cfg.get("evader_speed")
     speed_msg = f", task.evader_speed={float(evader_speed):.6g}" if evader_speed is not None else ""
@@ -1229,8 +1215,12 @@ def main() -> None:
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    exp_name = Path(args.config).stem
-    results_dir = root / "results" / exp_name
+    trd = exp_cfg.get("train_results_dir")
+    if trd:
+        trp = Path(str(trd))
+        results_dir = trp.resolve() if trp.is_absolute() else (root / trp).resolve()
+    else:
+        results_dir = root / "results" / Path(args.config).stem
     results_dir.mkdir(parents=True, exist_ok=True)
     # 与 checkpoints/<seed>/ 一致，文件名带种子便于区分不同 checkpoint 的评估输出
     seed_tag = f"seed{eval_seed}"
@@ -1262,11 +1252,12 @@ def main() -> None:
     # 3v1 追逃：用多种子评估中第一颗种子的轨迹画图
     if trajectories is not None:
         task_name = str(task_cfg.get("name", "navigation"))
-        results_root = (
-            root / "results" / "PursuitEvasion3v1Task"
-            if task_name in ("pursuit_evasion_3v1", "pursuit_evasion_3v1_ex1", "pursuit_evasion_3v1_ex2")
-            else results_dir
-        )
+        if exp_cfg.get("train_results_dir"):
+            results_root = results_dir
+        elif task_name in ("pursuit_evasion_3v1", "pursuit_evasion_3v1_ex1", "pursuit_evasion_3v1_ex2"):
+            results_root = root / "results" / "PursuitEvasion3v1Task"
+        else:
+            results_root = results_dir
         _plot_pursuit_evasion_trajectories_from_data(trajectories, results_root)
 
 

@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Override train config rollout_steps for each guarded run "
             f"(default {DEFAULT_ROLLOUT_STEPS}). "
-            "Materialized as run_dir/train_config.yaml before invoking train.py."
+            "Written into run_dir/<run folder name>.yaml before invoking train.py."
         ),
     )
     parser.add_argument("--min-rollout-fps", type=float, default=20.0)
@@ -205,11 +205,19 @@ def materialize_train_config_with_rollout(
     run_dir: Path,
     rollout_steps: int,
 ) -> str:
-    """Copy manifest train YAML into run_dir with rollout_steps overridden; return path relative to ROOT."""
+    """Copy manifest train YAML into run_dir with rollout_steps and train_results_dir set.
+
+    TensorBoard / checkpoints go under ``run_dir`` (see ``train_results_dir`` in scripts/train.py).
+    """
     src = ROOT / source_relpath
     cfg = load_yaml(src)
     cfg["rollout_steps"] = int(rollout_steps)
-    out_path = run_dir / "train_config.yaml"
+    try:
+        cfg["train_results_dir"] = run_dir.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        cfg["train_results_dir"] = str(run_dir.resolve())
+    stem = run_dir.name
+    out_path = run_dir / f"{stem}.yaml"
     with open(out_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
     return out_path.relative_to(ROOT).as_posix()
@@ -284,23 +292,32 @@ def run_monitored_training(
 def run_eval(
     *,
     args: argparse.Namespace,
-    config_relpath: str,
+    train_config_relpath: str,
     seed: int,
     episodes: int | None,
     run_dir: Path,
+    train_seed: int,
 ) -> int:
+    """Invoke eval.py using the same materialized train YAML as training (includes ``train_results_dir``)."""
     eval_episodes = 20 if episodes is None else int(episodes)
+    ckpt_path = run_dir / "checkpoints" / str(train_seed) / "best.pt"
+    try:
+        ckpt_rel = ckpt_path.relative_to(ROOT)
+    except ValueError:
+        ckpt_rel = ckpt_path
     command = [
         args.python,
         str(ROOT / "scripts" / "eval.py"),
         "--config",
-        config_relpath,
+        train_config_relpath,
         "--seed",
         str(seed),
         "--episodes",
         str(eval_episodes),
         "--num-seeds",
         str(args.eval_num_seeds),
+        "--ckpt",
+        ckpt_rel.as_posix(),
     ]
     return run_logged_command(command, log_path=run_dir / "eval_stdout.log")
 
@@ -367,6 +384,7 @@ def main() -> None:
             "index": idx,
             "config_relpath": config_relpath,
             "rollout_steps": int(args.rollout_steps),
+            "train_results_dir": str(run_dir.resolve()),
             "train_config_effective": train_cfg_effective,
             "seed": int(row.get("seed", 0)),
             "train_return_code": int(train_rc),
@@ -383,8 +401,9 @@ def main() -> None:
         if train_rc == 0 and not args.skip_eval:
             eval_rc = run_eval(
                 args=args,
-                config_relpath=config_relpath,
+                train_config_relpath=train_cfg_effective,
                 seed=int(row.get("seed", 0)),
+                train_seed=int(row.get("seed", 0)),
                 episodes=args.eval_episodes,
                 run_dir=run_dir,
             )
