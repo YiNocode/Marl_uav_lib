@@ -78,9 +78,9 @@ class VecRolloutBuffer:
         self.state[step] = state
         self.actions[step] = actions
         self.rewards[step] = rewards
-        self.dones[step] = dones.astype(np.float32)
-        self.terminated[step] = terminated.astype(np.float32)
-        self.truncated[step] = truncated.astype(np.float32)
+        self.dones[step] = np.asarray(dones, dtype=np.float32)
+        self.terminated[step] = np.asarray(terminated, dtype=np.float32)
+        self.truncated[step] = np.asarray(truncated, dtype=np.float32)
         self.log_probs[step] = log_probs
         self.values[step] = values
         self.next_values[step] = next_values

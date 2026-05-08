@@ -13,7 +13,8 @@ def default_vec_env_context() -> str:
 
     - ``VEC_ENV_MP_CONTEXT`` env may override (spawn|fork|forkserver).
     - Windows: ``spawn`` (required).
-    - Linux / POSIX (non-mac): ``forkserver`` (lower IPC spawn overhead than ``spawn``).
+    - Linux / POSIX (non-mac): ``fork`` (lowest worker startup / IPC vs ``spawn``; use ``forkserver``
+      if fork is unsafe for your stack).
     - macOS: ``spawn`` (safer with Obj-C runtimes / GUI stacks).
     """
     env_v = os.environ.get("VEC_ENV_MP_CONTEXT", "").strip().lower()
@@ -23,4 +24,4 @@ def default_vec_env_context() -> str:
         return "spawn"
     if sys.platform == "darwin":
         return "spawn"
-    return "forkserver"
+    return "fork"

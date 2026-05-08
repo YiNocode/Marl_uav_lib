@@ -145,6 +145,14 @@ class VecEnvTrainer(BaseRunner):
             else:
                 env_timing_totals[key] = env_timing_totals.get(key, 0.0) + float(arr[mask].sum())
 
+    def _aggregate_vec_worker_infos(self, infos: dict[str, Any], sums: dict[str, float]) -> None:
+        """Sum vec_worker_step_s across AsyncVectorEnv workers (subprocess compute time)."""
+        ws = infos.get("vec_worker_step_s")
+        if ws is None:
+            return
+        arr = np.asarray(ws, dtype=np.float64).ravel()
+        sums["worker_step_s_sum"] = sums.get("worker_step_s_sum", 0.0) + float(np.sum(arr))
+
     def _reset_tb_trackers(self, num_envs: int) -> None:
         self._ep_any_capture = np.zeros(num_envs, dtype=np.bool_)
         self._ep_any_collision = np.zeros(num_envs, dtype=np.bool_)
@@ -265,7 +273,17 @@ class VecEnvTrainer(BaseRunner):
         log_interval: int = 1,
         profile_timing: bool = False,
     ) -> Dict[str, Any]:
-        obs, state, avail_actions, _ = self.vec_env_manager.reset(seed=seed)
+        initial_reset_wall_s = 0.0
+        initial_worker_reset_s_sum = 0.0
+        if profile_timing:
+            tr0 = time.perf_counter()
+            obs, state, avail_actions, infos = self.vec_env_manager.reset(seed=seed)
+            initial_reset_wall_s = time.perf_counter() - tr0
+            wr = infos.get("vec_worker_reset_s") if isinstance(infos, dict) else None
+            if wr is not None:
+                initial_worker_reset_s_sum = float(np.sum(np.asarray(wr, dtype=np.float64).ravel()))
+        else:
+            obs, state, avail_actions, _ = self.vec_env_manager.reset(seed=seed)
         num_envs, num_agents, obs_dim = obs.shape
         state_dim = int(state.shape[-1])
         action_space = self.vec_env_manager.action_space
@@ -298,6 +316,7 @@ class VecEnvTrainer(BaseRunner):
             value_boot_time = 0.0
             update_time = 0.0
             env_timing_totals: dict[str, float] = {}
+            worker_sums: dict[str, float] = {}
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []
 
@@ -338,6 +357,8 @@ class VecEnvTrainer(BaseRunner):
                     avail_actions=avail_actions,
                 )
                 self._aggregate_timing(step_result.infos, env_timing_totals)
+                if profile_timing:
+                    self._aggregate_vec_worker_infos(step_result.infos, worker_sums)
                 self._update_tb_trackers(step_result.infos, num_envs)
 
                 episode_returns += step_result.rewards.sum(axis=1)
@@ -437,12 +458,28 @@ class VecEnvTrainer(BaseRunner):
                     steps_den = max(rollout_steps * num_envs, 1)
                     epoch_wall = rollout_time + update_time
                     rollout_frac = rollout_time / max(epoch_wall, 1e-9)
+                    update_frac = update_time / max(epoch_wall, 1e-9)
+                    worker_step_s_sum = float(worker_sums.get("worker_step_s_sum", 0.0))
+                    worker_mean_ms = 1000.0 * worker_step_s_sum / steps_den
+                    vec_batch_wall_ms = 1000.0 * vec_step_time / max(rollout_steps, 1)
+                    coord_proxy_ms = max(0.0, vec_batch_wall_ms - worker_mean_ms)
+                    reset_msg = ""
+                    if epoch == 0:
+                        reset_msg = (
+                            f" reset_wall_ms={1000.0 * initial_reset_wall_s:.3f} "
+                            f"worker_reset_cpu_sum_ms={1000.0 * initial_worker_reset_s_sum:.3f}"
+                        )
                     print(
                         f"[vec-profile] ms/env_step: policy={1000.0 * policy_time / steps_den:.3f} "
                         f"vec_env_ipc={1000.0 * vec_step_time / steps_den:.3f} "
                         f"bootstrap_V={1000.0 * value_boot_time / steps_den:.3f} "
                         f"ppo_update={update_ms_per_env_step:.3f} "
-                        f"rollout_frac_of_epoch={rollout_frac:.3f}"
+                        f"rollout_frac_of_epoch={rollout_frac:.3f} "
+                        f"learner_update_frac={update_frac:.3f} "
+                        f"batch_wall_ms={vec_batch_wall_ms:.3f} "
+                        f"worker_mean_ms={worker_mean_ms:.3f} "
+                        f"coord_proxy_ms={coord_proxy_ms:.3f}"
+                        f"{reset_msg}"
                     )
 
         return {

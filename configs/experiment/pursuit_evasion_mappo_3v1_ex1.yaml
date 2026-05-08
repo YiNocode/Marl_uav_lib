@@ -47,10 +47,11 @@ task:
 
 seed: 100
 num_epochs: 30000
+# PPO batch：优先保持 num_envs 在 8–16，用 rollout_steps 2048–4096 拉高总样本（约 16k–64k env steps/epoch）
 rollout_steps: 2048
 num_envs: 8
-# vec_env_context: 省略时由 marl_uav.utils.mp_context.default_vec_env_context 决定
-#（Linux 非 mac 为 forkserver；Windows/mac 为 spawn）。可显式写 spawn|fork|forkserver。
+# vec_env_context: 省略时 Linux 默认为 fork（可用 forkserver）；Windows/mac 为 spawn
+# torch_num_threads: 1   # 可选覆盖；num_envs>1 时 train 已将 torch 线程设为 1（避免与 worker 抢占）
 vec_env_shared_memory: true
 vec_env_copy: false
 log_interval: 1

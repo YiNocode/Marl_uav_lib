@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from marl_uav.runners.vecenv_trainer import VecEnvTrainer
 from marl_uav.utils.checkpoint import CheckpointManager
 from marl_uav.utils.config import load_config
 from marl_uav.utils.mp_context import default_vec_env_context
+from marl_uav.utils.torch_threading import configure_torch_threads
 from marl_uav.utils.env_action_bounds import boxed_action_bounds
 from marl_uav.utils.logger import Logger
 
@@ -237,6 +239,12 @@ def main() -> None:
     vec_env_shared_memory = bool(train_cfg.get("vec_env_shared_memory", True))
     vec_env_copy = bool(train_cfg.get("vec_env_copy", False))
     profile_timing = bool(train_cfg.get("vec_env_profile_timing", False))
+
+    configure_torch_threads(num_envs=num_envs, train_cfg=train_cfg)
+    if profile_timing and num_envs > 1:
+        os.environ["VEC_ENV_PROFILE_WORKERS"] = "1"
+    else:
+        os.environ.pop("VEC_ENV_PROFILE_WORKERS", None)
 
     task_cfg = train_cfg.get("task", {})
     env = build_env(env_cfg_path, seed=seed, task_cfg=task_cfg)

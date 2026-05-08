@@ -1,6 +1,6 @@
 """Benchmark ex1 training with single-env and AsyncVectorEnv rollout.
 
-Linux 上默认使用 ``forkserver``（见 ``marl_uav.utils.mp_context``）；可用 ``VEC_ENV_MP_CONTEXT``
+Linux 上默认使用 ``fork``（见 ``marl_uav.utils.mp_context``）；可用 ``VEC_ENV_MP_CONTEXT``
 或 ``--vec-env-context`` 覆盖。进程级 CPU / GPU 占用为粗采样（整机关联 CPU%、首个 NVIDIA GPU）。
 
 NUMA / CPU 亲和性示例（在本机终端手动执行，而非 Python 内）::
@@ -24,12 +24,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 import yaml
 
 from marl_uav.utils.mp_context import default_vec_env_context
 
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "experiment" / "pursuit_evasion_mappo_3v1_ex1.yaml"
 
 ROLL_LINE_RE = re.compile(
@@ -60,6 +62,11 @@ PROFILE_LINE_RE = re.compile(
     r"bootstrap_V=(?P<bootstrap_ms>[-+eE0-9.]+)\s+"
     r"ppo_update=(?P<ppo_update_ms>[-+eE0-9.]+)\s+"
     r"rollout_frac_of_epoch=(?P<rollout_frac>[-+eE0-9.]+)"
+    r"(?:\s+learner_update_frac=(?P<learner_update_frac>[-+eE0-9.]+)\s+"
+    r"batch_wall_ms=(?P<batch_wall_ms>[-+eE0-9.]+)\s+"
+    r"worker_mean_ms=(?P<worker_mean_ms>[-+eE0-9.]+)\s+"
+    r"coord_proxy_ms=(?P<coord_proxy_ms>[-+eE0-9.]+)"
+    r"(?:\s+reset_wall_ms=(?P<reset_wall_ms>[-+eE0-9.]+)\s+worker_reset_cpu_sum_ms=(?P<worker_reset_cpu_sum_ms>[-+eE0-9.]+))?)?"
 )
 
 try:
@@ -109,8 +116,8 @@ def parse_args() -> argparse.Namespace:
         "--num-envs",
         type=int,
         nargs="+",
-        default=[1, 4, 8, 16, 32, 64, 128],
-        help="Env counts to benchmark. Include 1 as baseline.",
+        default=[1, 8, 16],
+        help="Env counts (prefer 8–16; avoid scaling past IPC collapse — increase rollout_steps instead).",
     )
     parser.add_argument(
         "--num-epochs",
@@ -121,8 +128,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rollout-steps",
         type=int,
-        default=256,
-        help="Override rollout_steps for each benchmark run.",
+        default=2048,
+        help="Rollout horizon per env (raise to 2048–4096 for larger PPO batches; prefer over huge num_envs).",
     )
     parser.add_argument(
         "--eval-episodes",

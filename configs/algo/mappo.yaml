@@ -26,8 +26,8 @@ entropy_coef: 0.001
 # 优化器设置
 lr: 3e-4
 epochs: 4          # number of PPO epochs per batch
-# 较大 minibatch 可提高 GPU 利用率；按时间维切块，实际 chunk ≈ ceil(minibatch_size / num_agents) 步
-minibatch_size: 4096  # 0 表示整批；VecEnv 大 rollout 时可酌情调大（显存不足则减小）
+# 较大 minibatch 有利于 GPU；Vec rollout 总步数 ≈ rollout_steps×num_envs，可按 ~25–50% 总 transitions 设 minibatch
+minibatch_size: 8192  # 0 表示整批；显存不足则减小
 max_grad_norm: 0.5
 
 # 是否使用 centralized critic

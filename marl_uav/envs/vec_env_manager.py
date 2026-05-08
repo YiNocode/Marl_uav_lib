@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -12,6 +14,10 @@ from gymnasium.vector import AsyncVectorEnv, AutoresetMode
 
 from marl_uav.envs.factories import build_env_from_config
 from marl_uav.utils.mp_context import default_vec_env_context
+
+
+def _vec_profile_workers() -> bool:
+    return os.environ.get("VEC_ENV_PROFILE_WORKERS", "").strip().lower() in ("1", "true", "yes")
 
 
 def _box_like(shape: tuple[int, ...], *, low: float = -np.inf, high: float = np.inf) -> spaces.Box:
@@ -84,11 +90,31 @@ class _VectorEnvAdapter(Env):
         }
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-        obs_dict, info = self._env.reset(seed=seed, options=options)
+        if _vec_profile_workers():
+            t0 = time.perf_counter()
+            obs_dict, info = self._env.reset(seed=seed, options=options)
+            dt = time.perf_counter() - t0
+            if isinstance(info, dict):
+                info = dict(info)
+                info["vec_worker_reset_s"] = float(dt)
+            else:
+                info = {"vec_worker_reset_s": float(dt)}
+        else:
+            obs_dict, info = self._env.reset(seed=seed, options=options)
         return self._pack_obs(obs_dict), info
 
     def step(self, action):
-        obs_dict, rewards, terminated, truncated, info = self._env.step(action)
+        if _vec_profile_workers():
+            t0 = time.perf_counter()
+            obs_dict, rewards, terminated, truncated, info = self._env.step(action)
+            dt = time.perf_counter() - t0
+            if isinstance(info, dict):
+                info = dict(info)
+                info["vec_worker_step_s"] = float(dt)
+            else:
+                info = {"vec_worker_step_s": float(dt)}
+        else:
+            obs_dict, rewards, terminated, truncated, info = self._env.step(action)
         return self._pack_obs(obs_dict), np.asarray(rewards, dtype=np.float32), terminated, truncated, info
 
     def close(self) -> None:
@@ -169,6 +195,9 @@ class VecEnvManager:
 
         ``AsyncVectorEnv.reset`` waits until every subprocess has finished resetting,
         so slow envs block the whole vector step (barrier); avoid frequent resets in benchmarks.
+
+        Each worker typically performs a full env/backend ``reset`` (e.g. rebuild simulation),
+        which can dominate latency when tuning ``num_envs``.
         """
         base_seed = self.base_seed if seed is None else int(seed)
         seed_list = [base_seed + env_idx for env_idx in range(self.num_envs)]
