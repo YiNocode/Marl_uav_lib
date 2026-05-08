@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 import numpy as np
 import torch
@@ -11,9 +11,11 @@ from marl_uav.data.batch import Batch, EpisodeBatch
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
 from marl_uav.runners.rollout_worker import RolloutWorker
-from marl_uav.utils.checkpoint import CheckpointManager
-from marl_uav.utils.logger import Logger
 from marl_uav.utils.rl import compute_gae, compute_returns
+
+if TYPE_CHECKING:
+    from marl_uav.utils.checkpoint import CheckpointManager
+    from marl_uav.utils.logger import Logger
 
 
 class Trainer(BaseRunner):

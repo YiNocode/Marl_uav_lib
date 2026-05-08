@@ -1,7 +1,7 @@
 """Rollout worker: collect trajectories."""
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 import numpy as np
 import torch
@@ -9,7 +9,9 @@ import torch
 from marl_uav.buffers.episode_buffer import EpisodeBuffer
 from marl_uav.envs.base_env import BaseEnv
 from marl_uav.runners.base_runner import BaseRunner
-from marl_uav.utils.logger import Logger
+
+if TYPE_CHECKING:
+    from marl_uav.utils.logger import Logger
 
 # 3v1 围捕：episode 级 mean_C_cov / mean_C_col 仅对最后若干时刻（含 reset 后首帧）的指标取平均
 PURSUIT_STRUCTURE_MEAN_LAST_STEPS = 30

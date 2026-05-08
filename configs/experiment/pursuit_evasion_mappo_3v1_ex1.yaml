@@ -48,6 +48,10 @@ task:
 seed: 100
 num_epochs: 30000
 rollout_steps: 2048
+num_envs: 8
+vec_env_context: spawn
+vec_env_shared_memory: true
+vec_env_copy: false
 log_interval: 1
 eval_episodes: 20
 

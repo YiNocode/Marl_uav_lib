@@ -79,6 +79,7 @@ class PyFlytAviaryBackend:
         self,
         start_pos: np.ndarray,
         start_orn: np.ndarray,
+        seed: int | None = None,
     ) -> BackendState:
         """重置仿真并返回当前 BackendState.
 
@@ -111,6 +112,8 @@ class PyFlytAviaryBackend:
             drone_options_list.append(opt)
 
         # 实例化 Aviary，多机统一类型 / 统一控制频率
+        aviary_seed = self.seed if seed is None else int(seed)
+        self.seed = aviary_seed
         self.env = Aviary(
             start_pos=start_pos,
             start_orn=start_orn,
@@ -119,7 +122,7 @@ class PyFlytAviaryBackend:
             render=self.render,
             physics_hz=self.physics_hz,
             world_scale=self.world_scale,
-            seed=self.seed,
+            seed=aviary_seed,
         )
         if self.render:
             self.env.resetDebugVisualizerCamera(cameraDistance=5,

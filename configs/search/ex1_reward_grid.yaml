@@ -12,6 +12,10 @@ fixed_overrides:
   task.name: pursuit_evasion_3v1_ex1
   num_epochs: 12000
   rollout_steps: 256
+  num_envs: 8
+  vec_env_context: spawn
+  vec_env_shared_memory: true
+  vec_env_copy: false
   eval_episodes: 10
   log_interval: 1
 

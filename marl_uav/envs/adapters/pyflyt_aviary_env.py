@@ -101,7 +101,8 @@ class PyFlytAviaryEnv(BaseEnv):
             self.backend.num_agents,
             self.rng,
         )
-        backend_state = self.backend.reset(start_pos, start_orn)
+        backend_seed = int(self.rng.integers(0, np.iinfo(np.int32).max))
+        backend_state = self.backend.reset(start_pos, start_orn, seed=backend_seed)
         self.prev_backend_state = backend_state
         self.step_count = 0
 
