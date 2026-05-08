@@ -50,6 +50,26 @@ def _vec_info_bool(infos: dict[str, Any], key: str, env_idx: int) -> bool:
     return bool(x)
 
 
+def _cov_col_from_pursuit_structure(
+    ps: Any, env_idx: int, num_envs: int
+) -> tuple[float, float] | None:
+    """Gymnasium 向量化后 ``pursuit_structure`` 可能是单 env 的 dict，也可能是 {C_cov: (N,), C_col: (N,)} 批处理 dict。"""
+    if not isinstance(ps, dict) or "C_cov" not in ps or "C_col" not in ps:
+        return None
+    cc = np.asarray(ps["C_cov"], dtype=np.float64)
+    cl = np.asarray(ps["C_col"], dtype=np.float64)
+    if cc.size == 0 or cl.size == 0:
+        return None
+    if cc.size == num_envs and cl.size == num_envs:
+        return float(cc[env_idx]), float(cl[env_idx])
+    if cc.size == 1 and cl.size == 1:
+        return float(cc.flat[0]), float(cl.flat[0])
+    try:
+        return float(cc.flat[env_idx]), float(cl.flat[env_idx])
+    except (IndexError, ValueError, TypeError):
+        return float(cc.flat[0]), float(cl.flat[0])
+
+
 class VecEnvTrainer(BaseRunner):
     """Collect batched rollouts with AsyncVectorEnv and update PPO on flattened batches."""
 
@@ -167,7 +187,9 @@ class VecEnvTrainer(BaseRunner):
             self._ep_collision_penalty_sum[e] += _vec_info_float(infos, "reward_collision_penalty", e, 0.0)
             ps = _vec_info_pick(infos, "pursuit_structure", e)
             if isinstance(ps, dict) and "C_cov" in ps and "C_col" in ps:
-                self._ep_ps_pairs[e].append((float(ps["C_cov"]), float(ps["C_col"])))
+                pair = _cov_col_from_pursuit_structure(ps, e, num_envs)
+                if pair is not None:
+                    self._ep_ps_pairs[e].append(pair)
 
     def _clear_tb_trackers_env(self, env_idx: int) -> None:
         self._ep_any_capture[env_idx] = False
