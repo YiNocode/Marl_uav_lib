@@ -21,6 +21,7 @@ from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
 from marl_uav.runners.vecenv_trainer import VecEnvTrainer
 from marl_uav.utils.checkpoint import CheckpointManager
+from marl_uav.utils.config import load_config
 from marl_uav.utils.mp_context import default_vec_env_context
 from marl_uav.utils.env_action_bounds import boxed_action_bounds
 from marl_uav.utils.logger import Logger
