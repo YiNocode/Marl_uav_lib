@@ -33,6 +33,19 @@ def _vec_info_pick(infos: dict[str, Any], key: str, env_idx: int) -> Any:
     return v
 
 
+def _pick_batched_value(value: Any, env_idx: int) -> Any:
+    """Pick one env's value from a possibly batched info payload."""
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        if value.dtype == object:
+            return value.flat[env_idx] if value.size > env_idx else None
+        return value[env_idx] if value.shape[0] > env_idx else None
+    if isinstance(value, (list, tuple)):
+        return value[env_idx] if len(value) > env_idx else None
+    return value
+
+
 def _vec_info_pick_terminal_aware(infos: dict[str, Any], key: str, env_idx: int) -> Any:
     """Read one vector-env info item, falling back to terminal final_info when needed."""
     mask_key = f"_{key}"
@@ -60,7 +73,7 @@ def _vec_info_pick_terminal_aware(infos: dict[str, Any], key: str, env_idx: int)
     else:
         item = final_info
     if isinstance(item, dict) and key in item:
-        return item.get(key)
+        return _pick_batched_value(item.get(key), env_idx)
     return _vec_info_pick(infos, key, env_idx)
 
 

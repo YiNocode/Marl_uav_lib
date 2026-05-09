@@ -43,3 +43,19 @@ def test_vec_info_pick_terminal_aware_prefers_regular_info_when_mask_is_true():
 
     assert bool(_vec_info_pick_terminal_aware(infos, "captured", 0)) is True
     assert _vec_info_pick_terminal_aware(infos, "capture_step", 0) == 9
+
+
+def test_vec_info_pick_terminal_aware_handles_dict_of_batched_final_info():
+    infos = {
+        "captured": np.array([False, False], dtype=np.bool_),
+        "_captured": np.array([False, False], dtype=np.bool_),
+        "final_info": {
+            "captured": np.array([True, False], dtype=np.bool_),
+            "capture_step": np.array([23, -1], dtype=np.int32),
+        },
+        "_final_info": np.array([True, False], dtype=np.bool_),
+    }
+
+    assert bool(_vec_info_pick_terminal_aware(infos, "captured", 0)) is True
+    assert _vec_info_bool(infos, "captured", 0) is True
+    assert _vec_info_pick_terminal_aware(infos, "capture_step", 0) == 23
