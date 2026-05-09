@@ -73,9 +73,19 @@ def test_mappo_learner_single_update_updates_params_and_metrics_finite():
     metrics = learner.update(batch)
 
     # metrics 字段完整且为有限值
-    for key in ("loss/policy_loss", "loss/value_loss", "loss/entropy"):
+    for key in (
+        "loss/policy_loss",
+        "loss/value_loss",
+        "loss/entropy",
+        "train/approx_kl",
+        "train/clip_fraction",
+        "train/max_approx_kl",
+        "train/max_clip_fraction",
+    ):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"{key} is not finite: {metrics[key]}"
+    assert metrics["train/approx_kl"] <= metrics["train/max_approx_kl"] + 1e-12
+    assert metrics["train/clip_fraction"] <= metrics["train/max_clip_fraction"] + 1e-12
 
     # 参数应发生变化（至少有一个 tensor 不再相等）
     params_after = [p.detach().clone() for p in policy.parameters()]

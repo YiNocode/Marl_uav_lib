@@ -33,8 +33,39 @@ def _vec_info_pick(infos: dict[str, Any], key: str, env_idx: int) -> Any:
     return v
 
 
+def _vec_info_pick_terminal_aware(infos: dict[str, Any], key: str, env_idx: int) -> Any:
+    """Read one vector-env info item, falling back to terminal final_info when needed."""
+    mask_key = f"_{key}"
+    if key in infos and mask_key in infos:
+        mask = np.asarray(infos[mask_key], dtype=np.bool_).reshape(-1)
+        if env_idx < mask.size and bool(mask[env_idx]):
+            return _vec_info_pick(infos, key, env_idx)
+    elif key in infos:
+        value = _vec_info_pick(infos, key, env_idx)
+        if value is not None:
+            return value
+
+    final_info = infos.get("final_info")
+    if final_info is None:
+        return _vec_info_pick(infos, key, env_idx)
+    final_mask = infos.get("_final_info")
+    if final_mask is not None:
+        mask = np.asarray(final_mask, dtype=np.bool_).reshape(-1)
+        if env_idx >= mask.size or not bool(mask[env_idx]):
+            return _vec_info_pick(infos, key, env_idx)
+    if isinstance(final_info, np.ndarray):
+        item = final_info.flat[env_idx] if final_info.size > env_idx else None
+    elif isinstance(final_info, (list, tuple)):
+        item = final_info[env_idx] if len(final_info) > env_idx else None
+    else:
+        item = final_info
+    if isinstance(item, dict) and key in item:
+        return item.get(key)
+    return _vec_info_pick(infos, key, env_idx)
+
+
 def _vec_info_float(infos: dict[str, Any], key: str, env_idx: int, default: float = 0.0) -> float:
-    x = _vec_info_pick(infos, key, env_idx)
+    x = _vec_info_pick_terminal_aware(infos, key, env_idx)
     if x is None:
         return default
     try:
@@ -44,7 +75,7 @@ def _vec_info_float(infos: dict[str, Any], key: str, env_idx: int, default: floa
 
 
 def _vec_info_bool(infos: dict[str, Any], key: str, env_idx: int) -> bool:
-    x = _vec_info_pick(infos, key, env_idx)
+    x = _vec_info_pick_terminal_aware(infos, key, env_idx)
     if x is None:
         return False
     return bool(x)
@@ -180,7 +211,7 @@ class VecEnvTrainer(BaseRunner):
                 self._ep_any_timeout[e] = True
             if _vec_info_bool(infos, "obstacle_terminated", e):
                 self._ep_any_obstacle_term[e] = True
-            cs = _vec_info_pick(infos, "capture_step", e)
+            cs = _vec_info_pick_terminal_aware(infos, "capture_step", e)
             if self._ep_first_capture_step[e] < 0 and cs is not None:
                 try:
                     csi = int(cs)
@@ -193,7 +224,7 @@ class VecEnvTrainer(BaseRunner):
             self._ep_time_penalty_sum[e] += _vec_info_float(infos, "reward_time_penalty", e, 0.0)
             self._ep_reach_bonus_sum[e] += _vec_info_float(infos, "reward_reach_bonus", e, 0.0)
             self._ep_collision_penalty_sum[e] += _vec_info_float(infos, "reward_collision_penalty", e, 0.0)
-            ps = _vec_info_pick(infos, "pursuit_structure", e)
+            ps = _vec_info_pick_terminal_aware(infos, "pursuit_structure", e)
             if isinstance(ps, dict) and "C_cov" in ps and "C_col" in ps:
                 pair = _cov_col_from_pursuit_structure(ps, e, num_envs)
                 if pair is not None:

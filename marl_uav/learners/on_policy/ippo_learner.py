@@ -113,9 +113,12 @@ class IPPOLearner(BaseLearner):
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
-        last_approx_kl = 0.0
-        last_clip_fraction = 0.0
-        last_grad_norm = 0.0
+        total_approx_kl = 0.0
+        total_clip_fraction = 0.0
+        total_grad_norm = 0.0
+        max_approx_kl = 0.0
+        max_clip_fraction = 0.0
+        max_grad_norm = 0.0
         n_mb_updates = 0
 
         use_state = state_arr is not None and getattr(self.policy, "state_dim", None) is not None
@@ -184,9 +187,12 @@ class IPPOLearner(BaseLearner):
                 total_policy_loss += float(policy_loss.item())
                 total_value_loss += float(value_loss.item())
                 total_entropy += float(entropy_mean.item())
-                last_approx_kl = approx_kl
-                last_clip_fraction = clipped
-                last_grad_norm = grad_norm
+                total_approx_kl += approx_kl
+                total_clip_fraction += clipped
+                total_grad_norm += grad_norm
+                max_approx_kl = max(max_approx_kl, approx_kl)
+                max_clip_fraction = max(max_clip_fraction, clipped)
+                max_grad_norm = max(max_grad_norm, grad_norm)
                 n_mb_updates += 1
 
         denom = max(float(n_mb_updates), 1.0)
@@ -194,9 +200,12 @@ class IPPOLearner(BaseLearner):
             "loss/policy_loss": total_policy_loss / denom,
             "loss/value_loss": total_value_loss / denom,
             "loss/entropy": total_entropy / denom,
-            "train/approx_kl": last_approx_kl,
-            "train/clip_fraction": last_clip_fraction,
-            "train/grad_norm": last_grad_norm,
+            "train/approx_kl": total_approx_kl / denom,
+            "train/clip_fraction": total_clip_fraction / denom,
+            "train/grad_norm": total_grad_norm / denom,
+            "train/max_approx_kl": max_approx_kl,
+            "train/max_clip_fraction": max_clip_fraction,
+            "train/max_grad_norm": max_grad_norm,
         }
 
     # BaseLearner 兼容接口

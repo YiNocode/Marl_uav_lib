@@ -142,8 +142,10 @@ class MAPPOLearner(BaseLearner):
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
-        last_approx_kl = 0.0
-        last_clip_fraction = 0.0
+        total_approx_kl = 0.0
+        total_clip_fraction = 0.0
+        max_approx_kl = 0.0
+        max_clip_fraction = 0.0
         n_mb_updates = 0
 
         for _ in range(self.num_epochs):
@@ -201,8 +203,12 @@ class MAPPOLearner(BaseLearner):
                 total_policy_loss += float(policy_loss.item())
                 total_value_loss += float(value_loss.item())
                 total_entropy += float(entropy_mean.item())
-                last_approx_kl = 0.5 * float(((new_log_probs_flat - old_lp_c_t) ** 2).mean().item())
-                last_clip_fraction = float((ratio != clipped_ratio).float().mean().item())
+                approx_kl = 0.5 * float(((new_log_probs_flat - old_lp_c_t) ** 2).mean().item())
+                clip_fraction = float((ratio != clipped_ratio).float().mean().item())
+                total_approx_kl += approx_kl
+                total_clip_fraction += clip_fraction
+                max_approx_kl = max(max_approx_kl, approx_kl)
+                max_clip_fraction = max(max_clip_fraction, clip_fraction)
                 n_mb_updates += 1
 
         denom = max(float(n_mb_updates), 1.0)
@@ -210,8 +216,10 @@ class MAPPOLearner(BaseLearner):
             "loss/policy_loss": total_policy_loss / denom,
             "loss/value_loss": total_value_loss / denom,
             "loss/entropy": total_entropy / denom,
-            "train/approx_kl": last_approx_kl,
-            "train/clip_fraction": last_clip_fraction,
+            "train/approx_kl": total_approx_kl / denom,
+            "train/clip_fraction": total_clip_fraction / denom,
+            "train/max_approx_kl": max_approx_kl,
+            "train/max_clip_fraction": max_clip_fraction,
         }
 
     # BaseLearner 兼容接口
