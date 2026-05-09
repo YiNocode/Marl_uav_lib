@@ -46,6 +46,7 @@ class VecRolloutBuffer:
         self.actions = np.zeros(action_full_shape, dtype=action_dtype)
         self.rewards = np.zeros((T, E, N), dtype=np.float32)
         self.dones = np.zeros((T, E), dtype=np.float32)
+        self.masks = np.ones((T, E), dtype=np.float32)
         self.terminated = np.zeros((T, E), dtype=np.float32)
         self.truncated = np.zeros((T, E), dtype=np.float32)
         self.log_probs = np.zeros((T, E, N), dtype=np.float32)
@@ -112,6 +113,7 @@ class VecRolloutBuffer:
             "actions": te_first_contig(self.actions),
             "rewards": te_first_contig(self.rewards),
             "dones": te_first_contig(self.dones),
+            "masks": te_first_contig(self.masks),
             "log_probs": te_first_contig(self.log_probs),
             "values": te_first_contig(self.values),
             "advantages": te_first_contig(self.advantages),

@@ -24,11 +24,12 @@ entropy_coef: 0.001
 
 
 # 优化器设置
-lr: 3e-4
-epochs: 4          # number of PPO epochs per batch
+lr: 5e-5
+epochs: 2          # conservative PPO epochs to reduce policy drift
 # 较大 minibatch 有利于 GPU；Vec rollout 总步数 ≈ rollout_steps×num_envs，可按 ~25–50% 总 transitions 设 minibatch
 minibatch_size: 8192  # 0 表示整批；显存不足则减小
 max_grad_norm: 0.5
+target_kl: 0.03
 
 # 是否使用 centralized critic
 use_centralized_critic: true

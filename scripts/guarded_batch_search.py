@@ -21,7 +21,7 @@ from monitor_training_run import TrainingMonitor
 
 DEFAULT_GRID_CFG = ROOT / "configs" / "search" / "ex1_reward_grid.yaml"
 DEFAULT_SPEED_CFG = ROOT / "configs" / "search" / "ex1_evader_speed_sweep.yaml"
-DEFAULT_ROLLOUT_STEPS = 256
+DEFAULT_ROLLOUT_STEPS = 1024
 
 
 def parse_args() -> argparse.Namespace:

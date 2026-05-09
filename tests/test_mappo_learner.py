@@ -63,7 +63,7 @@ def test_mappo_learner_single_update_updates_params_and_metrics_finite():
 
     T, N, O, S, A = 6, 4, 5, 9, 7
     policy = DummyCentralizedCritic(obs_dim=O, state_dim=S, n_actions=A)
-    learner = MAPPOLearner(policy=policy, lr=3e-4, num_epochs=2)
+    learner = MAPPOLearner(policy=policy, lr=3e-4, num_epochs=2, target_kl=0.05)
 
     batch = _make_fake_episode_batch(T=T, N=N, obs_dim=O, state_dim=S, n_actions=A)
 
@@ -79,13 +79,23 @@ def test_mappo_learner_single_update_updates_params_and_metrics_finite():
         "loss/entropy",
         "train/approx_kl",
         "train/clip_fraction",
+        "train/grad_norm",
+        "train/ratio_mean",
+        "train/ratio_max",
+        "train/ratio_min",
         "train/max_approx_kl",
         "train/max_clip_fraction",
+        "train/max_grad_norm",
+        "train/max_ratio",
+        "train/min_ratio",
+        "train/early_stop",
     ):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"{key} is not finite: {metrics[key]}"
     assert metrics["train/approx_kl"] <= metrics["train/max_approx_kl"] + 1e-12
     assert metrics["train/clip_fraction"] <= metrics["train/max_clip_fraction"] + 1e-12
+    assert metrics["train/ratio_max"] >= metrics["train/ratio_mean"]
+    assert metrics["train/ratio_min"] <= metrics["train/ratio_mean"]
 
     # 参数应发生变化（至少有一个 tensor 不再相等）
     params_after = [p.detach().clone() for p in policy.parameters()]

@@ -250,6 +250,8 @@ def build_learner(algo_cfg_path: Path, policy: Any) -> IPPOLearner | MAPPOLearne
     entropy_coef = float(cfg.get("entropy_coef", cfg.get("ent_coef", 0.01)))
     max_grad_norm = float(cfg.get("max_grad_norm", 0.5))
     num_epochs = int(cfg.get("epochs", 4))
+    target_kl = cfg.get("target_kl")
+    target_kl = None if target_kl is None else float(target_kl)
 
     learner_kwargs = dict(
         lr=lr,
@@ -258,6 +260,7 @@ def build_learner(algo_cfg_path: Path, policy: Any) -> IPPOLearner | MAPPOLearne
         entropy_coef=entropy_coef,
         max_grad_norm=max_grad_norm,
         num_epochs=num_epochs,
+        target_kl=target_kl,
     )
 
     if algo_name == "sc_mappo":
