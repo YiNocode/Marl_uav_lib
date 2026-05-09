@@ -17,8 +17,8 @@ speed_step: 0.03
 
 fixed_overrides:
   task.name: pursuit_evasion_3v1_ex1
-  num_epochs: 12000
-  rollout_steps: 256
+  num_epochs: 6000
+  rollout_steps: 1024
   num_envs: 8
   vec_env_context: spawn
   vec_env_shared_memory: true

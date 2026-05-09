@@ -74,12 +74,3 @@ def test_mean_metric_dicts_averages_completed_episode_metrics():
     assert mean_metrics["capture_rate"] == 2.0 / 3.0
     assert mean_metrics["episode_return"] == 9.0
     assert mean_metrics["mean_goal_distance"] == 4.0
-
-
-def test_format_metric_suffix_only_emits_requested_present_keys():
-    suffix = VecEnvTrainer._format_metric_suffix(
-        {"capture_rate": 0.5, "mean_goal_distance": 3.25, "ignored": 1.0},
-        ("capture_rate", "mean_goal_distance", "timeout_rate"),
-    )
-
-    assert suffix == "capture_rate=0.5000 mean_goal_distance=3.2500"

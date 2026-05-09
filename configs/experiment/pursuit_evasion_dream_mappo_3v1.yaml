@@ -38,7 +38,8 @@ task:
   structure_hold_steps_cap: 30
 
 seed: 205
+num_envs: 8
 num_epochs: 30000
-rollout_steps: 256
+rollout_steps: 1024
 log_interval: 1
 eval_episodes: 20

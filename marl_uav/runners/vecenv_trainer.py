@@ -315,14 +315,6 @@ class VecEnvTrainer(BaseRunner):
                 out[key] = float(np.mean(vals))
         return out
 
-    @staticmethod
-    def _format_metric_suffix(metrics: dict[str, float], keys: tuple[str, ...]) -> str:
-        parts: list[str] = []
-        for key in keys:
-            if key in metrics:
-                parts.append(f"{key}={float(metrics[key]):.4f}")
-        return " ".join(parts)
-
     def _call_learner(self, batch: Any) -> Dict[str, Any]:
         if hasattr(self.learner, "update"):
             return getattr(self.learner, "update")(batch)
@@ -385,10 +377,6 @@ class VecEnvTrainer(BaseRunner):
             epoch_lens: list[int] = []
             epoch_train_metrics: list[dict[str, float]] = []
             epoch_env_metrics: list[dict[str, float]] = []
-            per_env_returns: list[list[float]] = [[] for _ in range(num_envs)]
-            per_env_lens: list[list[int]] = [[] for _ in range(num_envs)]
-            per_env_train_metrics: list[list[dict[str, float]]] = [[] for _ in range(num_envs)]
-            per_env_env_metrics: list[list[dict[str, float]]] = [[] for _ in range(num_envs)]
 
             for step in range(rollout_steps):
                 if profile_timing:
@@ -445,10 +433,6 @@ class VecEnvTrainer(BaseRunner):
                     )
                     epoch_train_metrics.append(train_metrics)
                     epoch_env_metrics.append(env_metrics)
-                    per_env_returns[env_idx].append(float(episode_returns[env_idx]))
-                    per_env_lens[env_idx].append(int(episode_lengths[env_idx]))
-                    per_env_train_metrics[env_idx].append(train_metrics)
-                    per_env_env_metrics[env_idx].append(env_metrics)
                     self._clear_tb_trackers_env(env_idx)
                     episode_returns[env_idx] = 0.0
                     episode_lengths[env_idx] = 0
@@ -477,47 +461,6 @@ class VecEnvTrainer(BaseRunner):
                 if loss_dict:
                     msg += " " + " ".join(f"{k}={float(v):.4f}" for k, v in loss_dict.items())
                 print(msg)
-
-                for env_idx in range(num_envs):
-                    if not per_env_returns[env_idx]:
-                        continue
-                    env_avg_ret = float(np.mean(per_env_returns[env_idx]))
-                    env_avg_len = float(np.mean(per_env_lens[env_idx]))
-                    env_train_mean = self._mean_metric_dicts(per_env_train_metrics[env_idx])
-                    env_diag_mean = self._mean_metric_dicts(per_env_env_metrics[env_idx])
-                    train_suffix = self._format_metric_suffix(
-                        env_train_mean,
-                        (
-                            "capture_rate",
-                            "success_rate",
-                            "collision_rate",
-                            "timeout_rate",
-                            "pursuer_oob_rate",
-                            "out_of_bounds_rate",
-                            "obstacle_termination_rate",
-                        ),
-                    )
-                    diag_suffix = self._format_metric_suffix(
-                        env_diag_mean,
-                        (
-                            "mean_goal_distance",
-                            "final_goal_distance",
-                            "reward_progress",
-                            "reward_time_penalty",
-                            "reward_reach_bonus",
-                            "reward_collision_penalty",
-                            "mean_C_cov",
-                            "mean_C_col",
-                        ),
-                    )
-                    extra_parts = [part for part in (train_suffix, diag_suffix) if part]
-                    extra_text = "" if not extra_parts else " " + " ".join(extra_parts)
-                    print(
-                        f"[vec-env] epoch={epoch+1}/{num_epochs} env={env_idx} "
-                        f"episodes={len(per_env_returns[env_idx])} "
-                        f"avg_return={env_avg_ret:.3f} avg_len={env_avg_len:.1f}"
-                        f"{extra_text}"
-                    )
 
                 if self.logger is not None and loss_dict:
                     ppo_metrics: Dict[str, float] = {}

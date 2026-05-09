@@ -7,14 +7,15 @@ action_space: continuous
 gamma: 0.99
 gae_lambda: 0.95
 
-clip_ratio: 0.2
+clip_ratio: 0.1
 
 value_coef: 0.5
 entropy_coef: 0.001
 
-lr: 3e-4
-epochs: 4
-minibatch_size: 256
+lr: 3e-5
+epochs: 2
+minibatch_size: 2048
 max_grad_norm: 0.5
+target_kl: 0.02
 
 use_centralized_critic: true
