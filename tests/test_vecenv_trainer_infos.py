@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from marl_uav.runners.vecenv_trainer import (
+    VecEnvTrainer,
     _vec_info_bool,
     _vec_info_float,
     _vec_info_pick,
@@ -59,3 +60,17 @@ def test_vec_info_pick_terminal_aware_handles_dict_of_batched_final_info():
     assert bool(_vec_info_pick_terminal_aware(infos, "captured", 0)) is True
     assert _vec_info_bool(infos, "captured", 0) is True
     assert _vec_info_pick_terminal_aware(infos, "capture_step", 0) == 23
+
+
+def test_mean_metric_dicts_averages_completed_episode_metrics():
+    metrics_list = [
+        {"capture_rate": 1.0, "episode_return": 12.0, "mean_goal_distance": 3.0},
+        {"capture_rate": 0.0, "episode_return": 6.0, "mean_goal_distance": 5.0},
+        {"capture_rate": 1.0, "episode_return": 9.0, "mean_goal_distance": 4.0},
+    ]
+
+    mean_metrics = VecEnvTrainer._mean_metric_dicts(metrics_list)
+
+    assert mean_metrics["capture_rate"] == 2.0 / 3.0
+    assert mean_metrics["episode_return"] == 9.0
+    assert mean_metrics["mean_goal_distance"] == 4.0

@@ -257,9 +257,9 @@ class VecEnvTrainer(BaseRunner):
         self._ep_collision_penalty_sum[env_idx] = 0.0
         self._ep_ps_pairs[env_idx].clear()
 
-    def _log_tb_episode(self, env_idx: int, ep_ret: float, ep_len: int, infos: dict[str, Any]) -> None:
-        if self.logger is None or ep_len <= 0:
-            return
+    def _build_tb_episode_metrics(
+        self, env_idx: int, ep_ret: float, ep_len: int, infos: dict[str, Any]
+    ) -> tuple[dict[str, float], dict[str, float]]:
         last_reached = _vec_info_bool(infos, "all_reached", env_idx)
         last_oob = _vec_info_bool(infos, "out_of_bounds", env_idx)
         last_col = _vec_info_bool(infos, "has_collision", env_idx)
@@ -284,7 +284,6 @@ class VecEnvTrainer(BaseRunner):
             "pursuer_oob_rate": 1.0 if pursuer_oob else 0.0,
             "obstacle_termination_rate": 1.0 if obs_term else 0.0,
         }
-        self.logger.log_train_env_metrics(train_metrics, step=self._tb_episode_idx)
         env_metrics: dict[str, float] = {}
         mgd_mean = float(self._ep_mgd_sum[env_idx] / max(ep_len, 1))
         env_metrics["mean_goal_distance"] = mgd_mean
@@ -300,8 +299,21 @@ class VecEnvTrainer(BaseRunner):
             cols = np.array([p[1] for p in tail], dtype=np.float64)
             env_metrics["mean_C_cov"] = float(np.mean(covs))
             env_metrics["mean_C_col"] = float(np.mean(cols))
-        self.logger.log_env_diagnostics(env_metrics, step=self._tb_episode_idx)
-        self._tb_episode_idx += 1
+        return train_metrics, env_metrics
+
+    @staticmethod
+    def _mean_metric_dicts(metrics_list: list[dict[str, float]]) -> dict[str, float]:
+        if not metrics_list:
+            return {}
+        keys: set[str] = set()
+        for metrics in metrics_list:
+            keys.update(metrics.keys())
+        out: dict[str, float] = {}
+        for key in sorted(keys):
+            vals = [float(metrics[key]) for metrics in metrics_list if key in metrics]
+            if vals:
+                out[key] = float(np.mean(vals))
+        return out
 
     def _call_learner(self, batch: Any) -> Dict[str, Any]:
         if hasattr(self.learner, "update"):
@@ -363,6 +375,8 @@ class VecEnvTrainer(BaseRunner):
             worker_sums: dict[str, float] = {}
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []
+            epoch_train_metrics: list[dict[str, float]] = []
+            epoch_env_metrics: list[dict[str, float]] = []
 
             for step in range(rollout_steps):
                 if profile_timing:
@@ -411,12 +425,14 @@ class VecEnvTrainer(BaseRunner):
                 for env_idx in done_envs:
                     epoch_returns.append(float(episode_returns[env_idx]))
                     epoch_lens.append(int(episode_lengths[env_idx]))
-                    self._log_tb_episode(
+                    train_metrics, env_metrics = self._build_tb_episode_metrics(
                         env_idx,
                         float(episode_returns[env_idx]),
                         int(episode_lengths[env_idx]),
                         step_result.infos,
                     )
+                    epoch_train_metrics.append(train_metrics)
+                    epoch_env_metrics.append(env_metrics)
                     self._clear_tb_trackers_env(env_idx)
                     episode_returns[env_idx] = 0.0
                     episode_lengths[env_idx] = 0
@@ -460,6 +476,14 @@ class VecEnvTrainer(BaseRunner):
                             ppo_metrics[dst] = float(loss_dict[src])
                     if ppo_metrics:
                         self.logger.log_ppo_metrics(ppo_metrics, step=epoch)
+
+                if self.logger is not None:
+                    mean_train_metrics = self._mean_metric_dicts(epoch_train_metrics)
+                    if mean_train_metrics:
+                        self.logger.log_train_env_metrics(mean_train_metrics, step=epoch)
+                    mean_env_metrics = self._mean_metric_dicts(epoch_env_metrics)
+                    if mean_env_metrics:
+                        self.logger.log_env_diagnostics(mean_env_metrics, step=epoch)
 
                 if self.checkpoint is not None:
                     metrics_for_ckpt: Dict[str, float] = {
