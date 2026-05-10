@@ -50,6 +50,8 @@ class PyFlytAviaryEnv(BaseEnv):
         self.task_state = None
         self.prev_backend_state = None
         self.step_count = 0
+        self._episode_return = 0.0
+        self._episode_len = 0
         self._avail_actions_cache: list[np.ndarray] | None = None
 
         self._action_space_type = str(action_space).lower()
@@ -105,6 +107,8 @@ class PyFlytAviaryEnv(BaseEnv):
         backend_state = self.backend.reset(start_pos, start_orn, seed=backend_seed)
         self.prev_backend_state = backend_state
         self.step_count = 0
+        self._episode_return = 0.0
+        self._episode_len = 0
 
         obs = self.task.build_obs(backend_state, self.task_state)
         state = self.task.build_state(backend_state, self.task_state)
@@ -197,6 +201,8 @@ class PyFlytAviaryEnv(BaseEnv):
             backend_state,
             self.task_state,
         )
+        self._episode_return += float(np.sum(rewards))
+        self._episode_len += 1
         t_after_rewards = time.perf_counter()
         terminated, truncated = self.task.compute_terminated_truncated(
             backend_state,
@@ -220,6 +226,7 @@ class PyFlytAviaryEnv(BaseEnv):
         else:
             # 对非 Navigation 任务，保留字段但语义不同：例如追逃中用 captured 代表“成功”
             all_reached = bool(getattr(self.task_state, "captured", False))
+        is_success = bool(terminated and all_reached)
 
         out_of_bounds = bool(
             np.any(np.abs(lin_pos[:, :2]) > getattr(self.task, "world_xy", 5.0) * 1.2)
@@ -270,9 +277,27 @@ class PyFlytAviaryEnv(BaseEnv):
                 # 本步因几何碰柱而 terminated，且本步不是「刚完成捕获」的成功终局
                 obstacle_terminated = bool(terminated and pursuer_obstacle_hit and not newly_captured)
 
+        termination_reason = "running"
+        if terminated:
+            if is_success and (captured or all_reached):
+                termination_reason = "capture"
+            elif obstacle_terminated or has_collision:
+                termination_reason = "collision"
+            elif too_many_pursuers_oob:
+                termination_reason = "pursuer_oob"
+            elif evader_oob:
+                termination_reason = "evader_oob"
+            elif out_of_bounds:
+                termination_reason = "out_of_bounds"
+            else:
+                termination_reason = "terminated"
+        elif truncated:
+            termination_reason = "timeout" if not is_success else "truncated_success"
+
         info = {
             "state": state,
             "all_reached": all_reached,
+            "is_success": is_success,
             "out_of_bounds": out_of_bounds,
             "has_collision": has_collision,
             "crash": crash,
@@ -282,6 +307,11 @@ class PyFlytAviaryEnv(BaseEnv):
             "reward_time_penalty": reward_time_penalty,
             "reward_reach_bonus": reward_reach_bonus,
             "reward_collision_penalty": reward_collision_penalty,
+            "terminated": bool(terminated),
+            "truncated": bool(truncated),
+            "termination_reason": termination_reason,
+            "episode_return": float(self._episode_return),
+            "episode_len": int(self._episode_len),
         }
 
         if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
@@ -300,6 +330,7 @@ class PyFlytAviaryEnv(BaseEnv):
                 pursuit_structure = compute_pursuit_structure_metrics_3v1(ps, pe)
             info.update(
                 {
+                    "capture": bool(captured),
                     "captured": captured,
                     "newly_captured": newly_captured,
                     "capture_step": capture_step,

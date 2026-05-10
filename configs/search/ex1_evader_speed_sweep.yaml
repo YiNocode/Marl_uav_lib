@@ -17,7 +17,7 @@ speed_step: 0.03
 
 fixed_overrides:
   task.name: pursuit_evasion_3v1_ex1
-  num_epochs: 6000
+  num_epochs: 1000
   rollout_steps: 1024
   num_envs: 8
   vec_env_context: spawn
@@ -36,6 +36,6 @@ fixed_overrides:
   task.contraction_phase_compress_scale: 2.5
   task.manifold_contraction_rate: 0.012
   task.manifold_structure_gate_scale: 0.75
-  task.residual_control_gain: 0.10
+  task.residual_control_gain: 0.50
   task.progress_gate_min_scale: 0.90
   task.role_progress_reward_scale: 1.00

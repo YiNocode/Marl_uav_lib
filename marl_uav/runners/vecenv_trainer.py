@@ -94,6 +94,21 @@ def _vec_info_bool(infos: dict[str, Any], key: str, env_idx: int) -> bool:
     return bool(x)
 
 
+def _vec_info_bool_any(infos: dict[str, Any], keys: tuple[str, ...], env_idx: int) -> bool:
+    for key in keys:
+        x = _vec_info_pick_terminal_aware(infos, key, env_idx)
+        if x is not None:
+            return bool(x)
+    return False
+
+
+def _vec_info_str(infos: dict[str, Any], key: str, env_idx: int, default: str = "") -> str:
+    x = _vec_info_pick_terminal_aware(infos, key, env_idx)
+    if x is None:
+        return default
+    return str(x)
+
+
 def _cov_col_from_pursuit_structure(
     ps: Any, env_idx: int, num_envs: int
 ) -> tuple[float, float] | None:
@@ -214,7 +229,7 @@ class VecEnvTrainer(BaseRunner):
 
     def _update_tb_trackers(self, infos: dict[str, Any], num_envs: int) -> None:
         for e in range(num_envs):
-            if _vec_info_bool(infos, "captured", e):
+            if _vec_info_bool_any(infos, ("capture", "captured"), e):
                 self._ep_any_capture[e] = True
             if _vec_info_bool(infos, "has_collision", e):
                 self._ep_any_collision[e] = True
@@ -257,21 +272,43 @@ class VecEnvTrainer(BaseRunner):
         self._ep_collision_penalty_sum[env_idx] = 0.0
         self._ep_ps_pairs[env_idx].clear()
 
+    @staticmethod
+    def _episode_debug_counts(metrics_list: list[dict[str, float]]) -> dict[str, float]:
+        completed = float(len(metrics_list))
+        captured = float(sum(metrics.get("capture_rate", 0.0) for metrics in metrics_list))
+        timeout = float(sum(metrics.get("timeout_rate", 0.0) for metrics in metrics_list))
+        collision = float(sum(metrics.get("collision_rate", 0.0) for metrics in metrics_list))
+        capture_rate = captured / completed if completed > 0 else 0.0
+        return {
+            "completed_episodes": completed,
+            "captured_episodes": captured,
+            "timeout_episodes": timeout,
+            "collision_episodes": collision,
+            "train_capture_rate": capture_rate,
+        }
+
     def _build_tb_episode_metrics(
         self, env_idx: int, ep_ret: float, ep_len: int, infos: dict[str, Any]
     ) -> tuple[dict[str, float], dict[str, float]]:
+        terminated = _vec_info_bool(infos, "terminated", env_idx)
+        truncated = _vec_info_bool(infos, "truncated", env_idx)
         last_reached = _vec_info_bool(infos, "all_reached", env_idx)
+        is_success = _vec_info_bool(infos, "is_success", env_idx) or (terminated and last_reached)
         last_oob = _vec_info_bool(infos, "out_of_bounds", env_idx)
         last_col = _vec_info_bool(infos, "has_collision", env_idx)
-        last_cap = _vec_info_bool(infos, "captured", env_idx)
+        last_cap = _vec_info_bool_any(infos, ("capture", "captured"), env_idx)
         last_p_oob = _vec_info_bool(infos, "pursuer_oob", env_idx)
         last_to = _vec_info_bool(infos, "timeout", env_idx)
         last_obs_term = _vec_info_bool(infos, "obstacle_terminated", env_idx)
-        success = bool(last_reached)
+        termination_reason = _vec_info_str(infos, "termination_reason", env_idx, default="")
+        success = bool(is_success)
         collision = bool(self._ep_any_collision[env_idx] or last_col)
-        capture = bool(self._ep_any_capture[env_idx] or last_cap)
+        capture = bool((self._ep_any_capture[env_idx] or last_cap) and terminated and success)
         pursuer_oob = bool(self._ep_any_pursuer_oob[env_idx] or last_p_oob)
-        timeout = bool(self._ep_any_timeout[env_idx] or last_to)
+        timeout = bool(
+            (self._ep_any_timeout[env_idx] or last_to or termination_reason == "timeout" or truncated)
+            and not success
+        )
         obs_term = bool(self._ep_any_obstacle_term[env_idx] or last_obs_term)
         train_metrics: dict[str, float] = {
             "episode_return": float(ep_ret),
@@ -283,6 +320,8 @@ class VecEnvTrainer(BaseRunner):
             "timeout_rate": 1.0 if timeout else 0.0,
             "pursuer_oob_rate": 1.0 if pursuer_oob else 0.0,
             "obstacle_termination_rate": 1.0 if obs_term else 0.0,
+            "terminated_rate": 1.0 if terminated else 0.0,
+            "truncated_rate": 1.0 if truncated else 0.0,
         }
         env_metrics: dict[str, float] = {}
         mgd_mean = float(self._ep_mgd_sum[env_idx] / max(ep_len, 1))
@@ -453,6 +492,7 @@ class VecEnvTrainer(BaseRunner):
             if log_interval > 0 and (epoch + 1) % log_interval == 0:
                 avg_ret = float(np.mean(epoch_returns)) if epoch_returns else 0.0
                 avg_len = float(np.mean(epoch_lens)) if epoch_lens else 0.0
+                debug_counts = self._episode_debug_counts(epoch_train_metrics)
                 msg = (
                     f"[vec-train] epoch={epoch+1}/{num_epochs} "
                     f"num_envs={num_envs} steps={rollout_steps * num_envs} "
@@ -461,6 +501,14 @@ class VecEnvTrainer(BaseRunner):
                 if loss_dict:
                     msg += " " + " ".join(f"{k}={float(v):.4f}" for k, v in loss_dict.items())
                 print(msg)
+                print(
+                    "[vec-train-debug] "
+                    f"completed_episodes={int(debug_counts['completed_episodes'])} "
+                    f"captured_episodes={int(debug_counts['captured_episodes'])} "
+                    f"timeout_episodes={int(debug_counts['timeout_episodes'])} "
+                    f"collision_episodes={int(debug_counts['collision_episodes'])} "
+                    f"train_capture_rate={debug_counts['train_capture_rate']:.4f}"
+                )
 
                 if self.logger is not None and loss_dict:
                     ppo_metrics: Dict[str, float] = {}
@@ -483,6 +531,8 @@ class VecEnvTrainer(BaseRunner):
 
                 if self.logger is not None:
                     mean_train_metrics = self._mean_metric_dicts(epoch_train_metrics)
+                    mean_train_metrics.update(debug_counts)
+                    mean_train_metrics["capture_rate"] = float(debug_counts["train_capture_rate"])
                     if mean_train_metrics:
                         self.logger.log_train_env_metrics(mean_train_metrics, step=epoch)
                     mean_env_metrics = self._mean_metric_dicts(epoch_env_metrics)
