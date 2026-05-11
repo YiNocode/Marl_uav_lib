@@ -192,6 +192,7 @@ class RolloutWorker(BaseRunner):
         traj_list: list[np.ndarray] = []
         pursuit_structure_series: List[Dict[str, Any]] = []
         dream_manifold_series: List[Dict[str, Any]] = []
+        reference_manifold_series: List[Dict[str, Any]] = []
         # 3v1 围捕：按时间顺序记录 C_cov / C_col，episode 末对最后 PURSUIT_STRUCTURE_MEAN_LAST_STEPS 步取均值
         pursuit_cov_col_pairs: list[tuple[float, float]] = []
 
@@ -210,6 +211,15 @@ class RolloutWorker(BaseRunner):
                 manifold0 = self._maybe_extract_dream_manifold_snapshot(state)
                 if manifold0 is not None:
                     dream_manifold_series.append(manifold0)
+                ref_targets0 = env_info.get("reference_manifold_targets")
+                ref_curve0 = env_info.get("reference_manifold_curve")
+                if ref_targets0 is not None or ref_curve0 is not None:
+                    reference_manifold_series.append(
+                        {
+                            "targets": None if ref_targets0 is None else np.asarray(ref_targets0, dtype=np.float32).copy(),
+                            "curve": None if ref_curve0 is None else np.asarray(ref_curve0, dtype=np.float32).copy(),
+                        }
+                    )
 
         # 用于聚合环境诊断（若 env 的 step_info 提供）
         mean_goal_distances: list[float] = []
@@ -283,6 +293,15 @@ class RolloutWorker(BaseRunner):
                 manifold_step = self._maybe_extract_dream_manifold_snapshot(next_state)
                 if manifold_step is not None:
                     dream_manifold_series.append(manifold_step)
+                ref_targets = step_info.get("reference_manifold_targets")
+                ref_curve = step_info.get("reference_manifold_curve")
+                if ref_targets is not None or ref_curve is not None:
+                    reference_manifold_series.append(
+                        {
+                            "targets": None if ref_targets is None else np.asarray(ref_targets, dtype=np.float32).copy(),
+                            "curve": None if ref_curve is None else np.asarray(ref_curve, dtype=np.float32).copy(),
+                        }
+                    )
             done = terminated or truncated
             episode_return += sum(rewards)
 
@@ -334,6 +353,8 @@ class RolloutWorker(BaseRunner):
             info["pursuit_structure_series"] = pursuit_structure_series
         if dream_manifold_series:
             info["dream_manifold_series"] = dream_manifold_series
+        if reference_manifold_series:
+            info["reference_manifold_series"] = reference_manifold_series
         if pursuit_cov_col_pairs:
             tail = pursuit_cov_col_pairs[-PURSUIT_STRUCTURE_MEAN_LAST_STEPS:]
             covs = np.array([p[0] for p in tail], dtype=np.float64)

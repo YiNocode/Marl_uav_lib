@@ -140,6 +140,7 @@ class PyFlytAviaryEnv(BaseEnv):
                 ps = lin_pos0[self.task_state.pursuer_ids]
                 pe = lin_pos0[self.task_state.evader_id]
                 info["pursuit_structure"] = compute_pursuit_structure_metrics_3v1(ps, pe)
+            info.update(self._build_reference_manifold_info(backend_state))
         if isinstance(self.task, PursuitEvasion3v1TaskEx2) and isinstance(
             self.task_state, PursuitEvasion3v1TaskEx2State
         ):
@@ -343,6 +344,7 @@ class PyFlytAviaryEnv(BaseEnv):
                     "obstacle_terminated": obstacle_terminated,
                 }
             )
+            info.update(self._build_reference_manifold_info(backend_state))
 
         t_after_info = time.perf_counter()
         info["timing"] = {
@@ -383,6 +385,27 @@ class PyFlytAviaryEnv(BaseEnv):
 
     def close(self):
         self.backend.close()
+
+    def _build_reference_manifold_info(self, backend_state) -> dict[str, np.ndarray]:
+        if not isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES) or self.task_state is None:
+            return {}
+        lin_pos = backend_state.states[:, 3, :]
+        pursuer_pos = np.asarray(lin_pos[self.task_state.pursuer_ids], dtype=np.float32)
+        evader_pos = np.asarray(lin_pos[self.task_state.evader_id], dtype=np.float32)
+        targets = self.task._reference_manifold_targets(
+            pursuer_pos,
+            evader_pos,
+            task_state=self.task_state,
+        ).astype(np.float32)
+        curve = self.task._reference_manifold_curve(
+            pursuer_pos,
+            evader_pos,
+            task_state=self.task_state,
+        ).astype(np.float32)
+        return {
+            "reference_manifold_targets": targets,
+            "reference_manifold_curve": curve,
+        }
 
     def set_training_progress(self, epoch: int, num_epochs: int):
         if hasattr(self.task, "set_training_progress"):

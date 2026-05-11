@@ -330,6 +330,15 @@ class PursuitEvasion3v1Task(BaseTask):
         manifold_target_rho_max: float | None = None,
         manifold_contraction_rate: float = 0.01,
         manifold_structure_gate_scale: float = 0.75,
+        obstacle_manifold_top_k: int = 4,
+        obstacle_manifold_influence_radius_scale: float = 2.5,
+        obstacle_manifold_clearance_margin_scale: float = 0.35,
+        obstacle_manifold_fourier_scale: float = 0.55,
+        obstacle_manifold_fourier_order: int = 2,
+        obstacle_manifold_bump_sigma_deg: float = 28.0,
+        obstacle_manifold_bump_scale: float = 0.45,
+        obstacle_manifold_max_extra_radius_scale: float = 1.75,
+        manifold_curve_num_samples: int = 91,
         assignment_inertia_margin: float = 0.05,
         role_progress_reward_scale: float = 0.75,
         residual_control_gain: float = 0.5,
@@ -462,6 +471,23 @@ class PursuitEvasion3v1Task(BaseTask):
         )
         self.manifold_contraction_rate = max(float(manifold_contraction_rate), 0.0)
         self.manifold_structure_gate_scale = float(np.clip(manifold_structure_gate_scale, 0.0, 1.0))
+        self.obstacle_manifold_top_k = max(int(obstacle_manifold_top_k), 1)
+        self.obstacle_manifold_influence_radius_scale = max(
+            float(obstacle_manifold_influence_radius_scale), 1e-3
+        )
+        self.obstacle_manifold_clearance_margin_scale = max(
+            float(obstacle_manifold_clearance_margin_scale), 0.0
+        )
+        self.obstacle_manifold_fourier_scale = max(float(obstacle_manifold_fourier_scale), 0.0)
+        self.obstacle_manifold_fourier_order = int(np.clip(obstacle_manifold_fourier_order, 1, 4))
+        self.obstacle_manifold_bump_sigma_rad = np.deg2rad(
+            float(np.clip(obstacle_manifold_bump_sigma_deg, 5.0, 90.0))
+        )
+        self.obstacle_manifold_bump_scale = max(float(obstacle_manifold_bump_scale), 0.0)
+        self.obstacle_manifold_max_extra_radius_scale = max(
+            float(obstacle_manifold_max_extra_radius_scale), 0.0
+        )
+        self.manifold_curve_num_samples = max(int(manifold_curve_num_samples), 16)
         self.assignment_inertia_margin = max(float(assignment_inertia_margin), 0.0)
         self.role_progress_reward_scale = float(role_progress_reward_scale)
         self.residual_control_gain_start = float(residual_control_gain)
@@ -722,6 +748,161 @@ class PursuitEvasion3v1Task(BaseTask):
             current_structure_metrics=getattr(task_state, "latest_structure_metrics", None),
         )
 
+    @staticmethod
+    def _wrap_angle_pi(angle: np.ndarray | float) -> np.ndarray | float:
+        return (np.asarray(angle) + np.pi) % (2.0 * np.pi) - np.pi
+
+    def _obstacle_manifold_clearance_radius(self, obstacle_r: np.ndarray) -> np.ndarray:
+        obstacle_r = np.asarray(obstacle_r, dtype=np.float32).reshape(-1)
+        extra = self.obstacle_manifold_clearance_margin_scale * float(self.capture_dist)
+        return obstacle_r + np.float32(extra)
+
+    def _local_obstacle_context(
+        self,
+        evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        obstacle_xy = np.asarray(
+            getattr(task_state, "obstacle_xy", np.zeros((0, 2), dtype=np.float32)),
+            dtype=np.float32,
+        ).reshape(-1, 2)
+        obstacle_r = np.asarray(
+            getattr(task_state, "obstacle_r", np.zeros((0,), dtype=np.float32)),
+            dtype=np.float32,
+        ).reshape(-1)
+        if obstacle_xy.size == 0 or obstacle_r.size == 0:
+            return (
+                np.zeros((0, 2), dtype=np.float32),
+                np.zeros((0,), dtype=np.float32),
+            )
+
+        evader_xy = np.asarray(evader_pos, dtype=np.float32).reshape(3)[:2]
+        rel = obstacle_xy - evader_xy[None, :]
+        dist = np.linalg.norm(rel, axis=1)
+        clear_r = self._obstacle_manifold_clearance_radius(obstacle_r)
+        influence_radius = float(self.obstacle_manifold_influence_radius_scale) * max(
+            float(self.capture_dist),
+            float(getattr(task_state, "latest_target_radius_xy", self.capture_dist)),
+        )
+        surface_dist = dist - clear_r
+        mask = surface_dist <= influence_radius
+        if np.any(mask):
+            rel = rel[mask]
+            clear_r = clear_r[mask]
+            surface_dist = surface_dist[mask]
+
+        if rel.shape[0] == 0:
+            return (
+                np.zeros((0, 2), dtype=np.float32),
+                np.zeros((0,), dtype=np.float32),
+            )
+
+        order = np.argsort(surface_dist)
+        take = min(self.obstacle_manifold_top_k, rel.shape[0])
+        return rel[order[:take]].astype(np.float32), clear_r[order[:take]].astype(np.float32)
+
+    def _obstacle_fourier_coefficients(
+        self,
+        rho_base: float,
+        obstacle_rel_xy: np.ndarray,
+        obstacle_clear_r: np.ndarray,
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        coeff_cos = np.zeros((self.obstacle_manifold_fourier_order,), dtype=np.float32)
+        coeff_sin = np.zeros((self.obstacle_manifold_fourier_order,), dtype=np.float32)
+        if obstacle_rel_xy.size == 0 or obstacle_clear_r.size == 0:
+            return float(rho_base), coeff_cos, coeff_sin
+
+        rel = np.asarray(obstacle_rel_xy, dtype=np.float32).reshape(-1, 2)
+        clear_r = np.asarray(obstacle_clear_r, dtype=np.float32).reshape(-1)
+        dist = np.linalg.norm(rel, axis=1)
+        phi = np.arctan2(rel[:, 1], rel[:, 0])
+        surface_dist = np.maximum(dist - clear_r, 0.0)
+        influence_radius = float(self.obstacle_manifold_influence_radius_scale) * max(
+            float(rho_base),
+            float(self.capture_dist),
+        )
+        closeness = np.clip(1.0 - surface_dist / max(influence_radius, 1e-6), 0.0, 1.0)
+        radial_weight = np.clip(clear_r / np.maximum(dist, clear_r + 1e-6), 0.0, 1.0)
+        weights = closeness * radial_weight
+        weight_sum = float(np.sum(weights))
+        if weight_sum <= 1e-6:
+            return float(rho_base), coeff_cos, coeff_sin
+
+        amp_base = float(self.obstacle_manifold_fourier_scale) * min(float(rho_base), influence_radius)
+        for k in range(1, self.obstacle_manifold_fourier_order + 1):
+            coeff_cos[k - 1] = np.float32(amp_base * np.sum(weights * np.cos(k * phi)) / weight_sum)
+            coeff_sin[k - 1] = np.float32(amp_base * np.sum(weights * np.sin(k * phi)) / weight_sum)
+
+        base_shift = float(
+            amp_base * np.sum(weights * np.clip(clear_r / np.maximum(dist, 1e-6), 0.0, 1.0)) / weight_sum
+        )
+        return float(rho_base + base_shift), coeff_cos, coeff_sin
+
+    def _obstacle_ray_required_radius(
+        self,
+        theta: np.ndarray,
+        obstacle_rel_xy: np.ndarray,
+        obstacle_clear_r: np.ndarray,
+    ) -> np.ndarray:
+        theta = np.asarray(theta, dtype=np.float32).reshape(-1)
+        required = np.zeros_like(theta, dtype=np.float32)
+        if obstacle_rel_xy.size == 0 or obstacle_clear_r.size == 0:
+            return required
+
+        rel = np.asarray(obstacle_rel_xy, dtype=np.float32).reshape(-1, 2)
+        clear_r = np.asarray(obstacle_clear_r, dtype=np.float32).reshape(-1)
+        dist = np.linalg.norm(rel, axis=1)
+        phi = np.arctan2(rel[:, 1], rel[:, 0])
+        sigma = max(float(self.obstacle_manifold_bump_sigma_rad), 1e-3)
+
+        for j in range(rel.shape[0]):
+            dj = float(dist[j])
+            rj = float(clear_r[j])
+            if dj <= 1e-6:
+                required = np.maximum(required, np.float32(rj))
+                continue
+
+            delta = np.asarray(self._wrap_angle_pi(theta - phi[j]), dtype=np.float32)
+            sin_abs = np.abs(np.sin(delta))
+            cos_val = np.cos(delta)
+            valid = (sin_abs < (rj / dj)) & (cos_val > 0.0)
+            if np.any(valid):
+                root = np.sqrt(np.maximum(rj * rj - (dj * sin_abs[valid]) ** 2, 0.0))
+                radial = dj * cos_val[valid] + root
+                required[valid] = np.maximum(required[valid], radial.astype(np.float32))
+
+            bump = np.exp(-0.5 * (delta / sigma) ** 2).astype(np.float32)
+            required = np.maximum(required, np.float32(self.obstacle_manifold_bump_scale * rj) * bump)
+        return required
+
+    def _obstacle_aware_radius(
+        self,
+        theta: np.ndarray,
+        rho_base: float,
+        evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState | None = None,
+    ) -> np.ndarray:
+        theta = np.asarray(theta, dtype=np.float32).reshape(-1)
+        obstacle_rel_xy, obstacle_clear_r = self._local_obstacle_context(evader_pos, task_state)
+        base_shift, coeff_cos, coeff_sin = self._obstacle_fourier_coefficients(
+            rho_base,
+            obstacle_rel_xy,
+            obstacle_clear_r,
+        )
+
+        radius = np.full_like(theta, np.float32(base_shift), dtype=np.float32)
+        for k in range(1, self.obstacle_manifold_fourier_order + 1):
+            radius += coeff_cos[k - 1] * np.cos(k * theta).astype(np.float32)
+            radius += coeff_sin[k - 1] * np.sin(k * theta).astype(np.float32)
+
+        ray_required = self._obstacle_ray_required_radius(theta, obstacle_rel_xy, obstacle_clear_r)
+        rho_floor = np.float32(self.manifold_target_rho_min)
+        extra_cap = np.float32(
+            float(rho_base) + self.obstacle_manifold_max_extra_radius_scale * max(float(self.capture_dist), 1e-6)
+        )
+        radius = np.maximum(radius, np.maximum(rho_floor, ray_required))
+        return np.clip(radius, rho_floor, extra_cap).astype(np.float32)
+
     def _reference_manifold_targets(
         self,
         pursuer_pos: np.ndarray,
@@ -730,19 +911,54 @@ class PursuitEvasion3v1Task(BaseTask):
     ) -> np.ndarray:
         pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
         evader_pos = np.asarray(evader_pos, dtype=np.float32).reshape(3)
-        rho = self._compute_target_radius_xy(
+        rho_base = self._compute_target_radius_xy(
             pursuer_pos,
             evader_pos,
             task_state=task_state,
         )
-        if task_state is not None:
-            task_state.latest_target_radius_xy = float(rho)
         ang = self.manifold_target_phase + (2.0 * np.pi / 3.0) * np.arange(3, dtype=np.float32)
+        rho = self._obstacle_aware_radius(
+            ang,
+            float(rho_base),
+            evader_pos,
+            task_state=task_state,
+        )
         targets = np.zeros((3, 3), dtype=np.float32)
         targets[:, 0] = evader_pos[0] + rho * np.cos(ang)
         targets[:, 1] = evader_pos[1] + rho * np.sin(ang)
         targets[:, 2] = evader_pos[2]
+        if task_state is not None:
+            task_state.latest_target_radius_xy = float(np.mean(rho))
         return targets
+
+    def _reference_manifold_curve(
+        self,
+        pursuer_pos: np.ndarray,
+        evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState | None = None,
+        *,
+        num_samples: int | None = None,
+    ) -> np.ndarray:
+        pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
+        evader_pos = np.asarray(evader_pos, dtype=np.float32).reshape(3)
+        rho_base = self._compute_target_radius_xy(
+            pursuer_pos,
+            evader_pos,
+            task_state=task_state,
+        )
+        n = self.manifold_curve_num_samples if num_samples is None else max(int(num_samples), 16)
+        theta = np.linspace(0.0, 2.0 * np.pi, n, endpoint=True, dtype=np.float32) + np.float32(self.manifold_target_phase)
+        rho = self._obstacle_aware_radius(
+            theta,
+            float(rho_base),
+            evader_pos,
+            task_state=task_state,
+        )
+        curve = np.zeros((theta.shape[0], 3), dtype=np.float32)
+        curve[:, 0] = evader_pos[0] + rho * np.cos(theta)
+        curve[:, 1] = evader_pos[1] + rho * np.sin(theta)
+        curve[:, 2] = evader_pos[2]
+        return curve
 
     def _compute_role_targets_and_assignment(
         self,

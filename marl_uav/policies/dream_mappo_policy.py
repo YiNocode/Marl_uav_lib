@@ -143,6 +143,7 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
             rho,
             psi,
             num_pursuers=self.num_pursuers,
+            rho_min=self.rho_min,
             a_max_geom=self.a_max_geom,
             sigma_p=self.sigma_p,
             action_dim=self.action_dim,
@@ -161,6 +162,7 @@ class DreamMappoCentralizedCriticPolicy(nn.Module, BasePolicy):
             rho,
             psi,
             num_pursuers=self.num_pursuers,
+            rho_min=self.rho_min,
         )
         rel_slot = targets - pursuer_pos
         rel_norm = torch.linalg.norm(rel_slot, dim=-1, keepdim=True).clamp_min(1e-6)

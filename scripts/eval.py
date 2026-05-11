@@ -510,6 +510,16 @@ def _dream_manifold_targets_from_snapshot(
     return targets
 
 
+def _curve_from_reference_snapshot(snapshot: Any) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if not isinstance(snapshot, dict):
+        return None, None
+    curve = snapshot.get("curve")
+    targets = snapshot.get("targets")
+    curve_arr = None if curve is None else np.asarray(curve, dtype=np.float64)
+    target_arr = None if targets is None else np.asarray(targets, dtype=np.float64)
+    return curve_arr, target_arr
+
+
 def _plot_pursuit_polar_schematic(
     ax: Any,
     metrics: dict[str, Any],
@@ -621,6 +631,8 @@ def _plot_pursuit_evasion_trajectories_from_data(
 
         manifold_raw = data.get("dream_manifold_series")
         manifold_series = manifold_raw if isinstance(manifold_raw, list) else []
+        reference_manifold_raw = data.get("reference_manifold_series")
+        reference_manifold_series = reference_manifold_raw if isinstance(reference_manifold_raw, list) else []
 
         if not series:
             metrics_sel: dict[str, Any] = {}
@@ -693,7 +705,34 @@ def _plot_pursuit_evasion_trajectories_from_data(
                     label="obstacles (xy center)",
                 )
 
-        if len(manifold_series) == Tp1 and n_real >= 4:
+        ref_curve_last = None
+        ref_targets_last = None
+        if len(reference_manifold_series) == Tp1:
+            ref_curve_last, ref_targets_last = _curve_from_reference_snapshot(reference_manifold_series[-1])
+
+        if ref_curve_last is not None and ref_curve_last.ndim == 2 and ref_curve_last.shape[0] > 0:
+            ax3d.plot(
+                ref_curve_last[:, 0],
+                ref_curve_last[:, 1],
+                ref_curve_last[:, 2],
+                "--",
+                color="purple",
+                lw=2.0,
+                alpha=0.95,
+                label="reference manifold",
+            )
+            if ref_targets_last is not None and ref_targets_last.ndim == 2 and ref_targets_last.shape[0] > 0:
+                ax3d.scatter(
+                    ref_targets_last[:, 0],
+                    ref_targets_last[:, 1],
+                    ref_targets_last[:, 2],
+                    c="purple",
+                    marker="x",
+                    s=70,
+                    linewidths=1.6,
+                    label="reference targets",
+                )
+        elif len(manifold_series) == Tp1 and n_real >= 4:
             manifold_last = manifold_series[-1]
             rho = manifold_last.get("rho")
             psi = manifold_last.get("psi")

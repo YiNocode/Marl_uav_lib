@@ -50,6 +50,14 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         init_clearance_extra_ratio: float = 0.02,
         obstacle_collision_penalty: float = 15.0,
         max_obstacle_place_trials: int = 8000,
+        obstacle_manifold_top_k: int = 4,
+        obstacle_manifold_influence_radius_scale: float = 2.5,
+        obstacle_manifold_clearance_margin_scale: float = 0.35,
+        obstacle_manifold_fourier_scale: float = 0.55,
+        obstacle_manifold_fourier_order: int = 2,
+        obstacle_manifold_bump_sigma_deg: float = 28.0,
+        obstacle_manifold_bump_scale: float = 0.45,
+        obstacle_manifold_max_extra_radius_scale: float = 1.75,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -66,6 +74,22 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         # 与 ex1 的 pos_xy_norm 一致，用于柱坐标 / 半径归一化
         self._obstacle_feature_slots = int(self.num_obstacles_max)
         self.obstacle_obs_extra_dim = 4 * self._obstacle_feature_slots
+        self.obstacle_manifold_top_k = max(int(obstacle_manifold_top_k), 1)
+        self.obstacle_manifold_influence_radius_scale = max(
+            float(obstacle_manifold_influence_radius_scale), 1e-3
+        )
+        self.obstacle_manifold_clearance_margin_scale = max(
+            float(obstacle_manifold_clearance_margin_scale), 0.0
+        )
+        self.obstacle_manifold_fourier_scale = max(float(obstacle_manifold_fourier_scale), 0.0)
+        self.obstacle_manifold_fourier_order = int(np.clip(obstacle_manifold_fourier_order, 1, 4))
+        self.obstacle_manifold_bump_sigma_rad = np.deg2rad(
+            float(np.clip(obstacle_manifold_bump_sigma_deg, 5.0, 90.0))
+        )
+        self.obstacle_manifold_bump_scale = max(float(obstacle_manifold_bump_scale), 0.0)
+        self.obstacle_manifold_max_extra_radius_scale = max(
+            float(obstacle_manifold_max_extra_radius_scale), 0.0
+        )
 
     def _obstacle_r_min_max(self) -> tuple[float, float]:
         lo = self.obstacle_radius_min_ratio * self.world_xy
