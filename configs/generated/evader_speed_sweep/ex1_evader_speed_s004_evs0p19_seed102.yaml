@@ -38,12 +38,12 @@ task:
   contraction_phase_compress_scale: 2.5
   manifold_contraction_rate: 0.012
   manifold_structure_gate_scale: 0.75
-  residual_control_gain: 0.1
+  residual_control_gain: 0.5
   progress_gate_min_scale: 0.9
   role_progress_reward_scale: 1.0
 seed: 102
 num_envs: 8
-num_epochs: 6000
+num_epochs: 1000
 rollout_steps: 1024
 log_interval: 1
 eval_episodes: 10

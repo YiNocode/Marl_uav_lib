@@ -514,6 +514,28 @@ class PursuitEvasion3v1Task(BaseTask):
         )
         self.role_obs_dim = 7
         self.role_state_dim = 12
+        self.set_training_progress(epoch=0, num_epochs=1)
+
+    def _compute_residual_control_gain(self, *, epoch: int, num_epochs: int) -> float:
+        start = float(self.residual_control_gain_start)
+        end = float(self.residual_control_gain_final)
+        decay_epochs = self.residual_control_gain_decay_epochs
+        if decay_epochs is None:
+            decay_epochs = max(int(num_epochs), 1)
+        else:
+            decay_epochs = max(int(decay_epochs), 1)
+        if decay_epochs <= 1:
+            return end
+        epoch_idx = min(max(int(epoch), 0), decay_epochs - 1)
+        progress = float(epoch_idx) / float(decay_epochs - 1)
+        return float(start + (end - start) * progress)
+
+    def set_training_progress(self, *, epoch: int, num_epochs: int) -> float:
+        self.residual_control_gain = self._compute_residual_control_gain(
+            epoch=epoch,
+            num_epochs=num_epochs,
+        )
+        return float(self.residual_control_gain)
 
     # ---------------------------------------------------------------------
     # reset / init
@@ -546,28 +568,6 @@ class PursuitEvasion3v1Task(BaseTask):
             ],
             dtype=np.float32,
         )
-        self.set_training_progress(epoch=0, num_epochs=1)
-
-    def _compute_residual_control_gain(self, *, epoch: int, num_epochs: int) -> float:
-        start = float(self.residual_control_gain_start)
-        end = float(self.residual_control_gain_final)
-        decay_epochs = self.residual_control_gain_decay_epochs
-        if decay_epochs is None:
-            decay_epochs = max(int(num_epochs), 1)
-        else:
-            decay_epochs = max(int(decay_epochs), 1)
-        if decay_epochs <= 1:
-            return end
-        epoch_idx = min(max(int(epoch), 0), decay_epochs - 1)
-        progress = float(epoch_idx) / float(decay_epochs - 1)
-        return float(start + (end - start) * progress)
-
-    def set_training_progress(self, *, epoch: int, num_epochs: int) -> float:
-        self.residual_control_gain = self._compute_residual_control_gain(
-            epoch=epoch,
-            num_epochs=num_epochs,
-        )
-        return float(self.residual_control_gain)
 
         noise_xy = rng.uniform(-pursuer_noise_xy, pursuer_noise_xy, size=(3, 2)).astype(np.float32)
         noise_z = rng.uniform(-self.init_pursuer_noise_z, self.init_pursuer_noise_z, size=(3, 1)).astype(np.float32)

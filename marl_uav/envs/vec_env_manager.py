@@ -117,6 +117,11 @@ class _VectorEnvAdapter(Env):
             obs_dict, rewards, terminated, truncated, info = self._env.step(action)
         return self._pack_obs(obs_dict), np.asarray(rewards, dtype=np.float32), terminated, truncated, info
 
+    def set_training_progress(self, epoch: int, num_epochs: int):
+        if hasattr(self._env, "set_training_progress"):
+            return self._env.set_training_progress(epoch, num_epochs)
+        return None
+
     def close(self) -> None:
         self._env.close()
 
