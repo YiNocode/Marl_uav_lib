@@ -237,6 +237,7 @@ class Trainer(BaseRunner):
 
                     if ppo_metrics:
                         self.logger.log_ppo_metrics(ppo_metrics, step=epoch)
+                    self.logger.flush()
 
                 # Checkpoint: 保存 latest & best 模型
                 if self.checkpoint is not None:

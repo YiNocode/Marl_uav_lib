@@ -77,3 +77,23 @@ def test_dream_manifold_targets_expand_blocked_direction_for_ex2_state():
     assert radii[0] > rho[0]
     assert radii[0] > radii[1]
     assert radii[0] > radii[2]
+
+
+def test_dream_manifold_targets_support_batched_column_rho_psi():
+    state = _base_state().repeat(8, 1)
+    obstacle_block = torch.tensor([[0.36, 0.0, 0.09, 1.0]], dtype=torch.float32).repeat(8, 1)
+    state = torch.cat([state, obstacle_block], dim=1)
+    rho = torch.full((8, 1), 0.3, dtype=torch.float32)
+    psi = torch.zeros((8, 1), dtype=torch.float32)
+
+    targets, pursuers, weights = manifold_targets_from_pursuit_state(
+        state,
+        rho,
+        psi,
+        num_pursuers=3,
+        rho_min=0.05,
+    )
+
+    assert targets.shape == (8, 3, 3)
+    assert pursuers.shape == (8, 3, 3)
+    assert weights.shape == (8, 3, 1)

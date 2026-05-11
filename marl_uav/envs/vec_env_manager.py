@@ -89,6 +89,59 @@ class _VectorEnvAdapter(Env):
             "avail_actions": avail_arr,
         }
 
+    @staticmethod
+    def _sanitize_reset_info(info: Any) -> dict[str, Any]:
+        """Keep reset info vector-env safe.
+
+        AsyncVectorEnv expects each worker to return info values that can be
+        stacked/batched consistently. ex2 reset info includes variable-length
+        obstacle arrays (different obstacle counts per env), which can break the
+        initial batched reset. The trainer does not consume those keys from
+        vectorized reset, so drop them here.
+        """
+        if not isinstance(info, dict):
+            return {}
+        out: dict[str, Any] = {}
+        if "vec_worker_reset_s" in info:
+            out["vec_worker_reset_s"] = float(info["vec_worker_reset_s"])
+        return out
+
+    @staticmethod
+    def _sanitize_step_info(info: Any) -> dict[str, Any]:
+        """Keep only vec-trainer-consumed step info keys."""
+        if not isinstance(info, dict):
+            return {}
+        allowed = {
+            "all_reached",
+            "capture",
+            "captured",
+            "capture_step",
+            "episode_len",
+            "episode_return",
+            "has_collision",
+            "is_success",
+            "mean_goal_distance",
+            "obstacle_terminated",
+            "out_of_bounds",
+            "pursuer_oob",
+            "pursuit_structure",
+            "reward_collision_penalty",
+            "reward_progress",
+            "reward_reach_bonus",
+            "reward_time_penalty",
+            "terminated",
+            "termination_reason",
+            "timeout",
+            "timing",
+            "truncated",
+            "vec_worker_step_s",
+        }
+        out: dict[str, Any] = {}
+        for key in allowed:
+            if key in info:
+                out[key] = info[key]
+        return out
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         if _vec_profile_workers():
             t0 = time.perf_counter()
@@ -96,12 +149,12 @@ class _VectorEnvAdapter(Env):
             dt = time.perf_counter() - t0
             if isinstance(info, dict):
                 info = dict(info)
-                info["vec_worker_reset_s"] = float(dt)
             else:
-                info = {"vec_worker_reset_s": float(dt)}
+                info = {}
+            info["vec_worker_reset_s"] = float(dt)
         else:
             obs_dict, info = self._env.reset(seed=seed, options=options)
-        return self._pack_obs(obs_dict), info
+        return self._pack_obs(obs_dict), self._sanitize_reset_info(info)
 
     def step(self, action):
         if _vec_profile_workers():
@@ -110,12 +163,18 @@ class _VectorEnvAdapter(Env):
             dt = time.perf_counter() - t0
             if isinstance(info, dict):
                 info = dict(info)
-                info["vec_worker_step_s"] = float(dt)
             else:
-                info = {"vec_worker_step_s": float(dt)}
+                info = {}
+            info["vec_worker_step_s"] = float(dt)
         else:
             obs_dict, rewards, terminated, truncated, info = self._env.step(action)
-        return self._pack_obs(obs_dict), np.asarray(rewards, dtype=np.float32), terminated, truncated, info
+        return (
+            self._pack_obs(obs_dict),
+            np.asarray(rewards, dtype=np.float32),
+            terminated,
+            truncated,
+            self._sanitize_step_info(info),
+        )
 
     def set_training_progress(self, epoch: int, num_epochs: int):
         if hasattr(self._env, "set_training_progress"):

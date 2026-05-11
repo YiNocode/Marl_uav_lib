@@ -70,6 +70,8 @@ def _obstacle_aware_radii_from_state(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     B = state_b.shape[0]
     n = int(num_pursuers)
+    rho = rho.reshape(B, -1)[:, 0]
+    psi = psi.reshape(B, -1)[:, 0]
     _, evader_start, _ = pursuit_state_slices(n)
     device = state_b.device
     dtype = state_b.dtype
@@ -111,9 +113,10 @@ def _obstacle_aware_radii_from_state(
     radial_weight = torch.clamp(clear_top / torch.clamp(dist_top, min=clear_top + 1e-6), 0.0, 1.0)
     weights = torch.where(valid_top, closeness * radial_weight, torch.zeros_like(closeness))
     weight_sum = weights.sum(dim=1, keepdim=True)
+    weight_sum_flat = weight_sum.squeeze(1)
 
     base_shift = torch.where(
-        weight_sum > 1e-6,
+        weight_sum_flat > 1e-6,
         float(obstacle_manifold_fourier_scale)
         * torch.minimum(rho, influence_radius)
         * (
@@ -121,7 +124,7 @@ def _obstacle_aware_radii_from_state(
                 weights
                 * torch.clamp(clear_top / torch.clamp(dist_top, min=1e-6), 0.0, 1.0)
             ).sum(dim=1)
-            / weight_sum.squeeze(1)
+            / weight_sum_flat
         ),
         torch.zeros_like(rho),
     )
@@ -130,13 +133,13 @@ def _obstacle_aware_radii_from_state(
     amp_base = float(obstacle_manifold_fourier_scale) * torch.minimum(rho, influence_radius)
     for k in range(1, int(obstacle_manifold_fourier_order) + 1):
         cos_coeff = torch.where(
-            weight_sum.squeeze(1) > 1e-6,
-            amp_base * ((weights * torch.cos(float(k) * phi_obs)).sum(dim=1) / weight_sum.squeeze(1)),
+            weight_sum_flat > 1e-6,
+            amp_base * ((weights * torch.cos(float(k) * phi_obs)).sum(dim=1) / weight_sum_flat),
             torch.zeros_like(rho),
         )
         sin_coeff = torch.where(
-            weight_sum.squeeze(1) > 1e-6,
-            amp_base * ((weights * torch.sin(float(k) * phi_obs)).sum(dim=1) / weight_sum.squeeze(1)),
+            weight_sum_flat > 1e-6,
+            amp_base * ((weights * torch.sin(float(k) * phi_obs)).sum(dim=1) / weight_sum_flat),
             torch.zeros_like(rho),
         )
         radius = radius + cos_coeff.unsqueeze(-1) * torch.cos(float(k) * theta)
@@ -181,6 +184,8 @@ def manifold_targets_from_pursuit_state(
     """Build per-pursuer manifold targets in normalized state coordinates."""
     B = state_b.shape[0]
     n = int(num_pursuers)
+    rho = rho.reshape(B, -1)[:, 0]
+    psi = psi.reshape(B, -1)[:, 0]
     p3, evader_start, _ = pursuit_state_slices(n)
     device = state_b.device
     dtype = state_b.dtype

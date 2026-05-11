@@ -268,16 +268,18 @@ def run_monitored_training(
 
     stdout_lines: list[str] = []
     monitor = TrainingMonitor(make_monitor_args(args))
+    stdout_log = run_dir / "train_stdout.log"
     line_no = 0
-    for raw_line in proc.stdout:
-        line_no += 1
-        print(raw_line, end="")
-        stdout_lines.append(raw_line)
-        monitor.inspect_line(line_no, raw_line)
+    with open(stdout_log, "w", encoding="utf-8") as log_f:
+        for raw_line in proc.stdout:
+            line_no += 1
+            print(raw_line, end="")
+            stdout_lines.append(raw_line)
+            log_f.write(raw_line)
+            log_f.flush()
+            monitor.inspect_line(line_no, raw_line)
 
     return_code = proc.wait()
-    stdout_log = run_dir / "train_stdout.log"
-    stdout_log.write_text("".join(stdout_lines), encoding="utf-8")
     summary = monitor.build_summary(
         return_code=return_code,
         source="guarded_batch_train",

@@ -424,6 +424,7 @@ class RolloutWorker(BaseRunner):
                         env_metrics[f"time_{k.replace('_s', '')}_ms"] = float(v)
             if env_metrics:
                 self._logger.log_env_diagnostics(env_metrics, step=step)
+            self._logger.flush()
 
             self._episode_idx += 1
 

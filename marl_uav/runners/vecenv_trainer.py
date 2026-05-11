@@ -370,6 +370,10 @@ class VecEnvTrainer(BaseRunner):
     ) -> Dict[str, Any]:
         initial_reset_wall_s = 0.0
         initial_worker_reset_s_sum = 0.0
+        print(
+            f"[vec-train] initial reset begin "
+            f"(seed={seed}, num_envs={getattr(self.vec_env_manager, 'num_envs', '?')})"
+        )
         if profile_timing:
             tr0 = time.perf_counter()
             obs, state, avail_actions, infos = self.vec_env_manager.reset(seed=seed)
@@ -379,6 +383,11 @@ class VecEnvTrainer(BaseRunner):
                 initial_worker_reset_s_sum = float(np.sum(np.asarray(wr, dtype=np.float64).ravel()))
         else:
             obs, state, avail_actions, _ = self.vec_env_manager.reset(seed=seed)
+        print(
+            "[vec-train] initial reset done "
+            f"obs_shape={tuple(obs.shape)} state_shape={tuple(state.shape)} "
+            f"avail_shape={None if avail_actions is None else tuple(avail_actions.shape)}"
+        )
         num_envs, num_agents, obs_dim = obs.shape
         state_dim = int(state.shape[-1])
         action_space = self.vec_env_manager.action_space
@@ -539,6 +548,7 @@ class VecEnvTrainer(BaseRunner):
                     mean_env_metrics = self._mean_metric_dicts(epoch_env_metrics)
                     if mean_env_metrics:
                         self.logger.log_env_diagnostics(mean_env_metrics, step=epoch)
+                    self.logger.flush()
 
                 if self.checkpoint is not None:
                     metrics_for_ckpt: Dict[str, float] = {

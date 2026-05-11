@@ -262,6 +262,8 @@ def main() -> None:
     results_dir = resolve_train_results_dir(root, train_cfg, args.train_config)
     tb_log_dir = results_dir / "tb_" / str(seed)
     tb_logger = Logger(log_dir=tb_log_dir)
+    tb_logger.log_scalar("run/alive", 1.0, 0)
+    tb_logger.flush()
 
     train_device = resolve_train_device(train_cfg)
     print(f"[train] device={train_device} (policy/learner on this device)")
@@ -284,6 +286,11 @@ def main() -> None:
     rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
     vec_env_manager = None
     if num_envs > 1:
+        print(
+            "[train] creating VecEnvManager "
+            f"(num_envs={num_envs}, context={vec_env_context}, "
+            f"shared_memory={vec_env_shared_memory}, copy={vec_env_copy})"
+        )
         vec_env_manager = VecEnvManager(
             env_cfg_path=env_cfg_path,
             task_cfg=task_cfg,
@@ -301,6 +308,7 @@ def main() -> None:
             checkpoint=ckpt_mgr,
             **trainer_kwargs,
         )
+        print("[train] VecEnvTrainer ready")
     else:
         trainer = Trainer(
             rollout_worker=rollout_worker,
@@ -311,6 +319,10 @@ def main() -> None:
         )
 
     try:
+        print(
+            f"[train] starting trainer.run "
+            f"(num_epochs={num_epochs}, rollout_steps={rollout_steps}, num_envs={num_envs})"
+        )
         run_kw: dict[str, Any] = dict(
             num_epochs=num_epochs,
             rollout_steps=rollout_steps,
