@@ -242,5 +242,8 @@ class VecEnvManager:
             gae_next_state=gae_next_state,
         )
 
+    def set_training_progress(self, *, epoch: int, num_epochs: int) -> list[Any]:
+        return list(self._vec_env.call("set_training_progress", int(epoch), int(num_epochs)))
+
     def close(self) -> None:
         self._vec_env.close()

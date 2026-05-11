@@ -333,6 +333,8 @@ class PursuitEvasion3v1Task(BaseTask):
         assignment_inertia_margin: float = 0.05,
         role_progress_reward_scale: float = 0.75,
         residual_control_gain: float = 0.5,
+        residual_control_gain_final: float | None = None,
+        residual_control_gain_decay_epochs: int | None = None,
         radial_compress_reward_scale: float = 1.0,
         radial_overshoot_penalty_scale: float = 0.5,
         contraction_reward_norm: float | None = None,
@@ -462,7 +464,18 @@ class PursuitEvasion3v1Task(BaseTask):
         self.manifold_structure_gate_scale = float(np.clip(manifold_structure_gate_scale, 0.0, 1.0))
         self.assignment_inertia_margin = max(float(assignment_inertia_margin), 0.0)
         self.role_progress_reward_scale = float(role_progress_reward_scale)
-        self.residual_control_gain = float(residual_control_gain)
+        self.residual_control_gain_start = float(residual_control_gain)
+        self.residual_control_gain_final = (
+            self.residual_control_gain_start
+            if residual_control_gain_final is None
+            else float(residual_control_gain_final)
+        )
+        self.residual_control_gain_decay_epochs = (
+            None
+            if residual_control_gain_decay_epochs is None
+            else max(int(residual_control_gain_decay_epochs), 1)
+        )
+        self.residual_control_gain = self.residual_control_gain_start
         self.radial_compress_reward_scale = float(radial_compress_reward_scale)
         self.radial_overshoot_penalty_scale = float(radial_overshoot_penalty_scale)
         self.contraction_reward_norm = (
@@ -533,6 +546,28 @@ class PursuitEvasion3v1Task(BaseTask):
             ],
             dtype=np.float32,
         )
+        self.set_training_progress(epoch=0, num_epochs=1)
+
+    def _compute_residual_control_gain(self, *, epoch: int, num_epochs: int) -> float:
+        start = float(self.residual_control_gain_start)
+        end = float(self.residual_control_gain_final)
+        decay_epochs = self.residual_control_gain_decay_epochs
+        if decay_epochs is None:
+            decay_epochs = max(int(num_epochs), 1)
+        else:
+            decay_epochs = max(int(decay_epochs), 1)
+        if decay_epochs <= 1:
+            return end
+        epoch_idx = min(max(int(epoch), 0), decay_epochs - 1)
+        progress = float(epoch_idx) / float(decay_epochs - 1)
+        return float(start + (end - start) * progress)
+
+    def set_training_progress(self, *, epoch: int, num_epochs: int) -> float:
+        self.residual_control_gain = self._compute_residual_control_gain(
+            epoch=epoch,
+            num_epochs=num_epochs,
+        )
+        return float(self.residual_control_gain)
 
         noise_xy = rng.uniform(-pursuer_noise_xy, pursuer_noise_xy, size=(3, 2)).astype(np.float32)
         noise_z = rng.uniform(-self.init_pursuer_noise_z, self.init_pursuer_noise_z, size=(3, 1)).astype(np.float32)

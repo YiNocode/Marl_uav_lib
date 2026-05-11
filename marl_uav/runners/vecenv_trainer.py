@@ -394,6 +394,7 @@ class VecEnvTrainer(BaseRunner):
         self._reset_tb_trackers(num_envs)
 
         for epoch in range(num_epochs):
+            self.vec_env_manager.set_training_progress(epoch=epoch, num_epochs=num_epochs)
             buffer = VecRolloutBuffer(
                 num_steps=rollout_steps,
                 num_envs=num_envs,

@@ -384,3 +384,8 @@ class PyFlytAviaryEnv(BaseEnv):
     def close(self):
         self.backend.close()
 
+    def set_training_progress(self, epoch: int, num_epochs: int):
+        if hasattr(self.task, "set_training_progress"):
+            return self.task.set_training_progress(epoch=epoch, num_epochs=num_epochs)
+        return None
+
