@@ -38,13 +38,6 @@ def parse_args() -> argparse.Namespace:
         default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
         help="Top-level training config path.",
     )
-    p.add_argument(
-        "--results-root",
-        type=str,
-        default=None,
-        help="Override root directory for training results. "
-             "If not set, use MARL_RESULTS_ROOT env var, then config, then project results/."
-    )
     return p.parse_args()
 
 
@@ -162,62 +155,17 @@ def build_policy(
     )
 
 
-import os
-from pathlib import Path
-from typing import Any
+def resolve_train_results_dir(root: Path, train_cfg: dict[str, Any], train_config_arg: str) -> Path:
+    """Root directory for TensorBoard logs and checkpoints.
 
-
-def resolve_train_results_dir(
-    root: Path,
-    train_cfg: dict[str, Any],
-    train_config_arg: str,
-) -> Path:
+    If ``train_results_dir`` is set in the train YAML, use it (relative to repo root or absolute).
+    Otherwise ``results/<stem(train-config)>`` (legacy behaviour).
     """
-    Root directory for TensorBoard logs and checkpoints.
-
-    Priority:
-    1. Environment variable: MARL_RESULTS_DIR
-    2. train_cfg["train_results_dir"]
-    3. default: results/<train-config-stem>
-
-    Notes
-    -----
-    This allows:
-    - local development to keep using project-local results/
-    - server/container training to redirect logs/checkpoints
-      to local SSD (e.g. /tmp or /local) to avoid NFS issues.
-    """
-
-    # ------------------------------------------------------------
-    # 1. Highest priority: environment variable
-    # ------------------------------------------------------------
-    override = os.environ.get("MARL_RESULTS_DIR")
-
-    # ------------------------------------------------------------
-    # 2. YAML config fallback
-    # ------------------------------------------------------------
+    override = train_cfg.get("train_results_dir")
     if not override:
-        override = train_cfg.get("train_results_dir")
-
-    # ------------------------------------------------------------
-    # 3. Default legacy behavior
-    # ------------------------------------------------------------
-    if not override:
-        result_dir = root / "results" / Path(train_config_arg).stem
-    else:
-        p = Path(str(override)).expanduser()
-
-        if p.is_absolute():
-            result_dir = p.resolve()
-        else:
-            result_dir = (root / p).resolve()
-
-    # ------------------------------------------------------------
-    # Ensure directory exists
-    # ------------------------------------------------------------
-    result_dir.mkdir(parents=True, exist_ok=True)
-
-    return result_dir
+        return root / "results" / Path(train_config_arg).stem
+    p = Path(str(override))
+    return p.resolve() if p.is_absolute() else (root / p).resolve()
 
 
 def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]]:
