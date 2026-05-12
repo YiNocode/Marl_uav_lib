@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Mapping
 import logging
 
-from torch.utils.tensorboard import SummaryWriter
-
 
 ScalarMapping = Mapping[str, float]
 
@@ -42,6 +40,14 @@ class Logger:
     """
 
     def __init__(self, log_dir: str | Path) -> None:
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError as e:
+            raise ImportError(
+                "TensorBoard logging requires the 'tensorboard' package. "
+                "Install it in the training environment, e.g. `pip install tensorboard`."
+            ) from e
+
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.tb = SummaryWriter(log_dir=str(self.log_dir))

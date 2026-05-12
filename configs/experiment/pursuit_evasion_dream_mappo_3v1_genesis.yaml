@@ -1,25 +1,26 @@
-# Dream-MAPPO ex1 on PyFlyt 3v1 pursuit.
+# Dream-MAPPO ex1 on Genesis 3v1 pursuit.
 #
-# ex1 adds structure-aware observations/rewards for encirclement geometry.
-# The Genesis counterpart is:
-#   configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml
+# Keep this file aligned with:
+#   configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
+# The only intentional difference is env -> configs/env/genesis_3v1.yaml.
 
-env: configs/env/pyflyt_3v1.yaml
+env: configs/env/genesis_3v1.yaml
 algo: configs/algo/dream_mappo.yaml
 model: configs/model/dream_mappo_centralized.yaml
 
 task:
   name: pursuit_evasion_3v1_ex1
-  # Arena / episode settings.
+  # Arena / episode settings. These mirror the PyFlyt ex1 config.
   world_xy: 20.0
   z_min: 0.5
   z_max: 5.0
   capture_dist: 1
   episode_limit: 1000
-  # High-level pursuit speeds and reward scales.
+  # High-level velocity limits used by the pursuit task before backend control.
   pursuer_speed: 0.15
   evader_speed: 0.1
   min_pursuer_sep: 0.6
+  # Base pursuit rewards.
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
   time_penalty: 0.05

@@ -1,17 +1,21 @@
-# Dream-MAPPO：与 MAPPO 相同 PPO / 中心化 critic 训练流程，仅策略结构不同（见 dream_mappo_policy）
+# Dream-MAPPO training hyperparameters.
+#
+# Dream-MAPPO uses the same PPO/MAPPO learner path as centralized-critic PPO,
+# but the policy architecture is selected by configs/model/dream_mappo_centralized.yaml.
 
 algo: dream_mappo
-
 action_space: continuous
 
+# Discounting and GAE.
 gamma: 0.99
 gae_lambda: 0.95
 
+# PPO objective.
 clip_ratio: 0.1
-
 value_coef: 0.5
 entropy_coef: 0.001
 
+# Optimizer / minibatch settings.
 lr: 3e-5
 epochs: 2
 minibatch_size: 2048

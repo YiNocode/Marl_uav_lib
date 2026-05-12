@@ -1,242 +1,233 @@
-## 项目简介
+# marl_uav_lib
 
-**marl_uav_lib** 是一个面向无人机（UAV）多智能体强化学习（Multi-Agent RL, MARL）的轻量级研究型代码库，主要目标：
+面向 3v1 无人机追逃实验的 MARL 研究代码。当前主线是 **Dream-MAPPO**，支持两类仿真后端：
 
-- **复现与对比经典多智能体算法**：目前支持 **IPPO** 与 **MAPPO（集中式评价器 PPO）**，并提供 `RandomPolicy` 作为基线。
-- **提供简洁清晰的训练/评估管线**：包含通用的 `MAC`（multi-agent controller）、`RolloutWorker`、`Trainer`、`Learner`、`Buffer` 等模块。
-- **支持玩具 UAV 环境**：内置 `ToyUavEnv` 适合作为算法实验与调试的测试床。
+- **Genesis**：新的主要无人机仿真后端，使用 Genesis DroneEntity 和 RPM 控制。
+- **PyFlyt**：保留的兼容后端，用于复现实验和对照。
 
-非常适合：
+本文只保留与 Dream-MAPPO、Genesis、PyFlyt、ex1/ex2 实验直接相关的内容。
 
-- 做多智能体 RL 课程 / 论文中的 **小规模实验与验证**；
-- 在统一框架下 **快速对比 IPPO / MAPPO 与随机策略基线**；
-- 作为自己扩展新算法、新环境的起点。
+## 主要实验
 
----
+**ex1：结构感知围捕**
 
-## 环境与依赖
+- 任务名：`pursuit_evasion_3v1_ex1`
+- 重点：结构感知观测、围捕结构奖励、覆盖/聚拢/角度指标。
+- PyFlyt 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml`
+- Genesis 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml`
 
-- **操作系统**：Linux / macOS / Windows（本仓库在 Windows 10 上开发验证）
-- **Python 版本**：`>= 3.10`
+**ex2：带圆柱障碍物的结构围捕**
 
-主依赖（根据源码推断，推荐手动安装）：
+- 任务名：`pursuit_evasion_3v1_ex2`
+- 重点：在 ex1 基础上加入圆柱障碍物、障碍物观测、障碍物避让流形和碰撞惩罚。
+- PyFlyt 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml`
+- Genesis 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml`
 
-- `numpy`
-- `torch`
-- `matplotlib`
-- `pyyaml`
-- （可选）`pytest`, `pytest-cov`（运行单元测试）
+Genesis 版 ex1/ex2 的训练参数与对应 PyFlyt 配置保持一致，主要差异仅是 `env` 指向 `configs/env/genesis_3v1.yaml`。
 
-项目自带 `pyproject.toml`，但未显式列出上述运行时依赖，推荐在虚拟环境中手动安装。
+## 后端配置
 
-### 安装步骤（推荐）
+**Genesis 后端**
 
-```bash
-# 1. 创建并激活虚拟环境（示例）
-python -m venv .venv
-.venv\Scripts\activate  # Windows PowerShell
-# 或 source .venv/bin/activate  # Linux / macOS
+- 环境配置：`configs/env/genesis_3v1.yaml`
+- 后端选择：`backend: genesis`
+- 动作空间：连续 `[vx, vy, yaw_rate, vz]`，动作上下界与 PyFlyt 3v1 保持一致。
+- 控制路径：task 输出高层速度 setpoint，`GenesisBackend` 转换为四旋翼 RPM。
+- Genesis 是可选依赖，只在请求 Genesis 后端时导入；未安装 Genesis 时 PyFlyt 路径不受影响。
 
-# 2. 安装本地包（开发模式）
-pip install -e .
+**PyFlyt 后端**
 
-# 3. 安装运行所需依赖
-pip install numpy torch matplotlib pyyaml
+- 环境配置：`configs/env/pyflyt_3v1.yaml`
+- 后端选择：旧配置中的 `backend:` 字典仍按 PyFlyt 解释。
+- 默认训练关闭渲染：`render: False`。
 
-# 4.（可选）安装测试依赖
-pip install pytest pytest-cov
-```
+## 训练命令
 
----
-
-## 代码结构概览
-
-核心目录结构（只列出与库本身强相关的部分）：
-
-- `marl_uav/`
-  - `agents/mac.py`：多智能体控制器（Multi-Agent Controller, MAC），封装共享策略对多个智能体的决策。
-  - `buffers/`
-    - `episode_buffer.py`：按 episode 存储的 on-policy 采样缓冲区。
-    - `replay_buffer.py`：通用 replay buffer（off-policy 可用）。
-  - `data/batch.py`：`Batch` / `EpisodeBatch` 等数据结构。
-  - `envs/adapters/toy_uav_env.py`：玩具 UAV 多智能体环境适配器 `ToyUavEnv`。
-  - `learners/on_policy/`
-    - `ippo_learner.py`：IPPO 学习器。
-    - `mappo_learner.py`：MAPPO 学习器（集中式 critic）。
-  - `modules/encoders/`：MLP 等特征编码网络。
-  - `modules/heads/`：策略头、价值头模块。
-  - `policies/`
-    - `actor_critic_policy.py`：标准 Actor-Critic 策略。
-    - `centralized_critic_policy.py`：集中式 critic 策略（actor 用局部观测、critic 用全局 state）。
-    - `random_policy.py`：随机策略，用作 baseline。
-  - `runners/`
-    - `rollout_worker.py`：负责环境交互与采样的 worker。
-    - `trainer.py`：on-policy 训练主循环（使用 GAE 计算优势）。
-    - `evaluator.py`：评估若干 episode 的平均回报等指标。
-  - `utils/`
-    - `rl.py`：包含 `compute_gae` 等 RL 工具函数。
-    - `config.py`：加载 YAML 配置。
-
-- `configs/`
-  - `env/toy_uav.yaml`：玩具 UAV 环境配置。
-  - `algo/ippo.yaml`：IPPO 超参数配置。
-  - `algo/mappo.yaml`：MAPPO 超参数配置（含集中式 critic 标志）。
-  - `model/*.yaml`：模型结构配置（MLP / RNN / attention / centralized_critic 等）。
-  - `train/default.yaml`：默认训练顶层配置（指向 env / algo / model）。
-  - `experiment/mappo_toy.yaml`：在 ToyUavEnv 上跑 MAPPO 的实验配置。
-
-- `scripts/`
-  - `train.py`：通用 IPPO / MAPPO 训练入口脚本（通过 `--train-config` 选择配置）。
-  - `run_ippo_toy_uav.py`：在 ToyUavEnv 上对比 RandomPolicy vs IPPO，并绘制学习曲线。
-  - `run_mappo_toy_uav.py`：在 ToyUavEnv 上对比 RandomPolicy vs MAPPO，并绘制学习曲线。
-  - `eval.py`、`run_rollout_episode.py` 等：示例评估/采样脚本。
-
-- `tests/`：针对 MAC、buffer、policy、centralized critic 等的单元测试及 smoke test。
-
----
-
-## 快速开始
-
-### 1. 使用通用训练脚本训练 IPPO / MAPPO
-
-通用训练入口位于 `scripts/train.py`，内部会根据顶层 YAML 配置构建环境、策略、学习器与训练循环。
-
-**默认训练（IPPO + ToyUavEnv + MLP）**：
+在仓库根目录运行：
 
 ```bash
 cd e:\lyn\year_1\research\marl_uav_lib
-python scripts/train.py
 ```
 
-`scripts/train.py` 中默认使用：
-
-- 顶层训练配置：`configs/train/default.yaml`
-  - `env: configs/env/toy_uav.yaml`
-  - `algo: configs/algo/ippo.yaml`
-  - `model: configs/model/mlp.yaml`
-  - 其余如 `seed`、`total_timesteps`、`log_interval` 等控制训练调度。
-
-运行时会：
-
-- 创建 `ToyUavEnv` 环境实例；
-- 根据 `model` 配置构建 `ActorCriticPolicy` 或 `CentralizedCriticPolicy`；
-- 用 `MAC` 封装多智能体决策；
-- 使用 `Trainer` 执行「采样 → GAE/returns 计算 → learner.update → 打印日志」的主训练循环；
-- 训练结束后，用 `Evaluator` 在若干 episode 上评估当前策略性能。
-
-**使用 MAPPO + 集中式 critic 训练 ToyUavEnv（示例）**：
+**Genesis + Dream-MAPPO ex1**
 
 ```bash
-python scripts/train.py --train-config configs/experiment/mappo_toy.yaml
+python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml
 ```
 
-其中 `configs/experiment/mappo_toy.yaml` 指定：
-
-- `env: configs/env/toy_uav.yaml`
-- `algo: configs/algo/mappo.yaml`（`use_centralized_critic: true`）
-- `model: configs/model/centralized_critic.yaml`
-
-### 2. 对比 RandomPolicy vs IPPO / MAPPO（含画图）
-
-我们提供了两个完整示例脚本，用于在 ToyUavEnv 上对比随机策略与学习到的策略：
-
-- **RandomPolicy vs IPPO**：
+**Genesis + Dream-MAPPO ex2**
 
 ```bash
-python scripts/run_ippo_toy_uav.py
+python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml
 ```
 
-- **RandomPolicy vs MAPPO（集中式 critic）**：
+兼容入口：
 
 ```bash
-python scripts/run_mappo_toy_uav.py
+python scripts/train.py --train-config configs/train/genesis_3v1.yaml
 ```
 
-脚本行为概览：
+`configs/train/genesis_3v1.yaml` 当前等价于 Genesis ex2 训练入口。
 
-- 首先在 ToyUavEnv 上多次评估 `RandomPolicy`，得到 baseline 平均回报；
-- 然后对 IPPO / MAPPO 分别进行多 seed 训练，每个 epoch 后进行评估；
-- 使用 `matplotlib` 绘制 **环境步数 vs 平均评估回报** 曲线，并用虚线标出 RandomPolicy 基线；
-- 最后在控制台打印最终性能对比结论。
-
-注意：这两个脚本假定运行在 CPU 上，如需 GPU 请自行调整 `device` 相关代码。
-
----
-
-## 配置文件说明（简要）
-
-### 1. 顶层训练配置：`configs/train/default.yaml`
-
-主要字段：
-
-- `env`：环境配置文件路径（如 `configs/env/toy_uav.yaml`）
-- `algo`：算法配置文件路径（如 `configs/algo/ippo.yaml`）
-- `model`：模型配置文件路径（如 `configs/model/mlp.yaml`）
-- `seed`：随机种子
-- `total_timesteps`：总训练步数（部分脚本目前使用 `num_epochs + rollout_steps` 形式控制）
-- `log_interval` / `save_interval` / `eval_interval`：日志、模型保存与评估频率。
-
-### 2. 环境配置：`configs/env/toy_uav.yaml`
-
-关键字段：
-
-- `env_id: toy_uav`
-- `num_agents`：智能体数量（示例为 2）
-- `episode_limit`：每个 episode 的最大步数
-- `world_size`、`step_size`、`goal_reach_dist`：决定 UAV 的移动空间与到达目标判定阈值。
-
-`ToyUavEnv` 会根据该配置设置观测维度 `obs_dim`、动作维度 `n_actions` 等（示例注释中为 `obs_dim=6`, `action_dim=5`）。
-
-### 3. 算法配置：`configs/algo/ippo.yaml` 与 `configs/algo/mappo.yaml`
-
-共同字段（部分名称略有差异）：
-
-- 折扣与 GAE：`gamma`, `gae_lambda`
-- PPO 裁剪：`clip_ratio`
-- 损失系数：`ent_coef` / `vf_coef` 或 `entropy_coef` / `value_coef`
-- 优化相关：`lr`, `epochs`, `max_grad_norm`
-- MAPPO 额外：`use_centralized_critic: true`，以及可能的 `minibatch_size` 等。
-
-`scripts/train.py` 在 `build_learner` 中会从这些字段中解析出学习器超参数。
-
-### 4. 模型配置：`configs/model/*.yaml`
-
-根据 `type` 字段决定使用的模型结构：
-
-- `mlp`：MLP encoder + Actor-Critic policy（典型 IPPO 场景）
-- `centralized_critic`：集中式 critic 策略（actor 用局部观测，critic 用全局 state）
-- `rnn` / `attention` / `comm` 等文件可作为后续扩展的模型配置模板。
-
----
-
-## 训练流程概要（内部实现）
-
-虽然使用者通常只需调用脚本，但理解内部流程有助于自定义扩展：
-
-1. **Rollout 阶段**：`RolloutWorker.collect_episode` 在环境中采样一个完整 episode，记录 `obs`, `actions`, `rewards`, `dones`, `values` 等。
-2. **后处理阶段**：`Trainer._postprocess_episode` 使用 `compute_gae` 计算每个时间步的 `advantages` 和 `returns`，并打包成 `EpisodeBatch`。
-3. **更新阶段**：`Learner.update(batch)`（如 `IPPOLearner` / `MAPPOLearner`）根据 PPO 损失函数更新策略/价值网络。
-4. **日志与评估**：在 `Trainer.run` 中按 `log_interval` 打印训练指标；在脚本中使用 `Evaluator` 定期在若干 episode 上评估策略。
-
----
-
-## 运行测试
-
-如果你安装了 `pytest`：
+**PyFlyt + Dream-MAPPO ex1**
 
 ```bash
-pytest
+python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
 ```
 
-`tests/` 目录中包含对 buffer、MAC、policy、centralized critic、GAE 等模块的单元测试，以及 IPPO 与 MAPPO 的 smoke test，用于快速验证实现是否正常工作。
+**PyFlyt + Dream-MAPPO ex2**
 
----
+```bash
+python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml
+```
 
-## 自行扩展的建议
+## Guarded 训练入口
 
-- **新增环境**：参考 `ToyUavEnv` 的接口与适配方式，在 `marl_uav/envs/adapters/` 中增加自定义环境 wrapper，并在 `configs/env/` 中添加相应 YAML。
-- **新增算法**：在 `marl_uav/learners/` 中继承 `BaseLearner` 实现自己的 `update`，并在 `configs/algo/` 中写好超参数 YAML，最后在 `scripts/train.py` 的 `build_learner` 中加入分支。
-- **新增模型结构**：在 `modules/encoders/`、`modules/heads/` 中添加新的网络模块，在 `policies/` 中组合成策略，并在 `configs/model/` 中配置好 `type` 与超参数。
+`scripts/guarded_dream_mappo.py` 会为每次训练生成独立运行目录，并记录 stdout、monitor summary、checkpoint 和 TensorBoard 日志。
 
-如果你在扩展或运行过程中遇到具体问题，可以随时记录你使用的命令、配置文件和报错信息，方便快速定位。
+默认运行 Genesis + Dream-MAPPO ex2：
 
+```bash
+python scripts/guarded_dream_mappo.py
+```
+
+Genesis ex1：
+
+```bash
+python scripts/guarded_dream_mappo.py --experiment ex1 --backend genesis
+```
+
+Genesis ex2：
+
+```bash
+python scripts/guarded_dream_mappo.py --experiment ex2 --backend genesis
+```
+
+PyFlyt ex1 / ex2：
+
+```bash
+python scripts/guarded_dream_mappo.py --experiment ex1 --backend pyflyt
+python scripts/guarded_dream_mappo.py --experiment ex2 --backend pyflyt
+```
+
+常用调试参数：
+
+```bash
+python scripts/guarded_dream_mappo.py --experiment ex2 --backend genesis --rollout-steps 128 --skip-eval
+```
+
+## 评估命令
+
+`scripts/eval.py` 使用与训练相同的环境工厂，因此传入 Genesis 实验配置时会创建 Genesis 后端；传入 PyFlyt 配置时会创建 PyFlyt 后端。
+
+**Genesis ex1**
+
+```bash
+python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml --seed 205 --train-seed 205 --episodes 20
+```
+
+**Genesis ex2**
+
+```bash
+python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml --seed 205 --train-seed 205 --episodes 20
+```
+
+**PyFlyt ex1 / ex2**
+
+```bash
+python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml --seed 205 --train-seed 205 --episodes 20
+python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml --seed 205 --train-seed 205 --episodes 20
+```
+
+如果 checkpoint 不在默认目录，可以显式指定：
+
+```bash
+python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml --ckpt results/pursuit_evasion_dream_mappo_3v1_ex2_genesis/checkpoints/205/best.pt
+```
+
+## 日志和 Checkpoint
+
+普通 `scripts/train.py` 训练默认输出到：
+
+```text
+results/<train_config_stem>/
+```
+
+例如 Genesis ex2：
+
+```text
+results/pursuit_evasion_dream_mappo_3v1_ex2_genesis/
+  tb_/205/
+  checkpoints/205/
+    latest.pt
+    best.pt
+```
+
+其中：
+
+- TensorBoard 日志：`results/<run>/tb_/<seed>/`
+- checkpoint：`results/<run>/checkpoints/<seed>/`
+- `best.pt`：按 `train/avg_return` 保存的最佳模型。
+- `latest.pt`：最近一次保存的模型。
+
+Guarded 训练默认输出到：
+
+```text
+results/guarded_dream_mappo_runs/<config_stem>_<timestamp>/
+```
+
+目录内包含：
+
+```text
+train_stdout.log
+train_monitor_summary.json
+run_summary.json
+eval_stdout.log              # 未使用 --skip-eval 时生成
+tb_/<seed>/
+checkpoints/<seed>/
+```
+
+## Smoke Test
+
+Genesis 未安装时，Genesis smoke test 会 skip。
+
+```bash
+python scripts/smoke_test_genesis_3v1.py
+pytest tests/test_genesis_backend_smoke.py -q
+```
+
+旧 PyFlyt 路径不会因为 Genesis 未安装而失败。训练 Genesis 前请先确认本机 Genesis 可用，并按你的机器情况设置 `configs/env/genesis_3v1.yaml` 中的：
+
+- `backend_config.device: gpu | cpu`
+- `backend_config.headless: true | false`
+- `backend_config.dt`
+- `backend_config.hover_rpm`
+- `backend_config.max_rpm`
+
+## 常见问题
+
+**Genesis 初始化时出现 UnicodeEncodeError / 乱码，且 TensorBoard 目录为空**
+
+这是 Windows 子进程 stdout/stderr 使用 GBK 编码导致的，Genesis banner 中的 Unicode 字符会触发日志写入失败。当前训练入口已经强制设置 UTF-8：
+
+- `scripts/train.py`
+- `scripts/eval.py`
+- `scripts/guarded_dream_mappo.py`
+- `scripts/smoke_test_genesis_3v1.py`
+
+请重新运行训练命令。旧的失败 run 目录不会自动补写 TensorBoard event；新的 run 会在环境创建前写入 `run/alive`，路径仍为：
+
+```text
+results/guarded_dream_mappo_runs/<config_stem>_<timestamp>/tb_/<seed>/
+```
+
+## 关键配置文件
+
+- `configs/env/genesis_3v1.yaml`：Genesis DroneEntity 后端、RPM 控制器、动作范围。
+- `configs/env/pyflyt_3v1.yaml`：PyFlyt 兼容后端、动作范围、渲染/频率设置。
+- `configs/algo/dream_mappo.yaml`：Dream-MAPPO 的 PPO/MAPPO 训练超参。
+- `configs/model/dream_mappo_centralized.yaml`：Dream-MAPPO actor/critic 网络与几何动作头参数。
+- `configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml`：Genesis ex1。
+- `configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml`：Genesis ex2。
+- `configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml`：PyFlyt ex1。
+- `configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml`：PyFlyt ex2。

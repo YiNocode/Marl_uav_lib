@@ -1,4 +1,4 @@
-"""Guarded single-run launcher for ex2 pursuit-evasion experiments."""
+"""Guarded launcher for Dream-MAPPO pursuit-evasion experiments."""
 
 from __future__ import annotations
 
@@ -15,16 +15,24 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
 from monitor_training_run import TrainingMonitor
+from marl_uav.utils.stdio import configure_utf8_stdio, utf8_subprocess_env
+
+
+configure_utf8_stdio()
 
 
 DEFAULT_MAPPO_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_mappo_3v1_ex2.yaml"
-DEFAULT_DREAM_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2.yaml"
+DEFAULT_DREAM_PYFLYT_EX1_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"
+DEFAULT_DREAM_PYFLYT_EX2_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2.yaml"
+DEFAULT_DREAM_GENESIS_EX1_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_genesis.yaml"
+DEFAULT_DREAM_GENESIS_EX2_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml"
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run one guarded ex2 training job with isolated artifacts.")
+    p = argparse.ArgumentParser(description="Run one guarded Dream-MAPPO training job with isolated artifacts.")
     p.add_argument(
         "--config",
         type=str,
@@ -37,11 +45,23 @@ def parse_args() -> argparse.Namespace:
         default="dream",
         help="Pick the default config when --config is omitted.",
     )
+    p.add_argument(
+        "--experiment",
+        choices=("ex1", "ex2"),
+        default="ex2",
+        help="Pick the Dream-MAPPO pursuit experiment when --config is omitted.",
+    )
+    p.add_argument(
+        "--backend",
+        choices=("genesis", "pyflyt"),
+        default="genesis",
+        help="Pick the simulator backend for the default Dream-MAPPO config.",
+    )
     p.add_argument("--python", type=str, default=sys.executable, help="Python executable for subprocesses.")
     p.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "results" / "guarded_ex2_runs",
+        default=ROOT / "results" / "guarded_dream_mappo_runs",
         help="Parent directory for isolated run folders.",
     )
     p.add_argument(
@@ -86,7 +106,11 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def resolve_config(args: argparse.Namespace) -> Path:
     if args.config:
         return (ROOT / args.config).resolve()
-    return DEFAULT_DREAM_CFG if args.variant == "dream" else DEFAULT_MAPPO_CFG
+    if args.variant == "mappo":
+        return DEFAULT_MAPPO_CFG
+    if args.backend == "genesis":
+        return DEFAULT_DREAM_GENESIS_EX1_CFG if args.experiment == "ex1" else DEFAULT_DREAM_GENESIS_EX2_CFG
+    return DEFAULT_DREAM_PYFLYT_EX1_CFG if args.experiment == "ex1" else DEFAULT_DREAM_PYFLYT_EX2_CFG
 
 
 def make_monitor_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -136,6 +160,7 @@ def run_monitored_training(
     proc = subprocess.Popen(
         cmd,
         cwd=ROOT,
+        env=utf8_subprocess_env(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -161,7 +186,7 @@ def run_monitored_training(
     rc = proc.wait()
     summary = monitor.build_summary(
         return_code=rc,
-        source="guarded_single_ex2_train",
+        source="guarded_dream_mappo_train",
         stdout_log=str(stdout_log),
     )
     (run_dir / "train_monitor_summary.json").write_text(
@@ -175,6 +200,7 @@ def run_logged_command(command: list[str], *, log_path: Path) -> int:
     proc = subprocess.run(
         command,
         cwd=ROOT,
+        env=utf8_subprocess_env(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -265,8 +291,8 @@ def main() -> None:
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    print(f"\n[guarded-ex2] run dir: {run_dir}")
-    print(f"[guarded-ex2] summary: {run_dir / 'run_summary.json'}")
+    print(f"\n[guarded-dream-mappo] run dir: {run_dir}")
+    print(f"[guarded-dream-mappo] summary: {run_dir / 'run_summary.json'}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Evaluation entry script for config-driven IPPO / MAPPO experiments."""
+"""Evaluation entry script for config-driven Dream-MAPPO experiments."""
 
 from __future__ import annotations
 
@@ -18,13 +18,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from marl_uav.agents.mac import MAC
-from marl_uav.envs.adapters.toy_uav_env import ToyUavEnv
-from marl_uav.envs.adapters.pyflyt_aviary_env import (
-    PURSUIT_EVASION_3V1_TASK_TYPES,
-    PyFlytAviaryEnv,
-)
-from marl_uav.envs.backends.pyflyt_aviary_backend import PyFlytAviaryBackend
-from marl_uav.envs.tasks.navigation_task import NavigationTask
+from marl_uav.envs.factories import build_env_from_config
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task import (
     PursuitEvasion3v1Task,
     compute_pursuit_structure_metrics_3v1,
@@ -43,87 +37,22 @@ from marl_uav.runners.evaluator import Evaluator
 from marl_uav.runners.rollout_worker import PURSUIT_STRUCTURE_MEAN_LAST_STEPS, RolloutWorker
 from marl_uav.utils.checkpoint import load_checkpoint
 from marl_uav.utils.config import load_config
-from marl_uav.utils.env_action_bounds import (
-    boxed_action_bounds,
-    parse_continuous_action_bounds_from_env_cfg,
+from marl_uav.utils.env_action_bounds import boxed_action_bounds
+from marl_uav.utils.stdio import configure_utf8_stdio
+
+
+configure_utf8_stdio()
+
+
+PURSUIT_EVASION_3V1_TASK_TYPES = (
+    PursuitEvasion3v1Task,
+    PursuitEvasion3v1TaskEx1,
+    PursuitEvasion3v1TaskEx2,
 )
 
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument(
-        "--config",
-        type=str,
-        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
-        help="顶层实验配置 (包含 env/algo/model/task 子配置路径)",
-    )
-    p.add_argument("--seed", type=int, default=203, help="评估用随机种子（首个种子）")
-    p.add_argument("--num-seeds", type=int, default=1, help="评估种子数量，每个种子独立跑若干 episode")
-    p.add_argument("--episodes", type=int, default=20, help="每个种子评估 episode 数量")
-    p.add_argument(
-        "--ckpt",
-        type=str,
-        default="",
-        help=(
-            "可选：显式指定 checkpoint 路径 "
-            "(默认使用 results/<exp_name>/checkpoints/<seed>/best.pt，与 train.py 一致)"
-        ),
-    )
-    return p.parse_args()
-
-
 def build_env(env_cfg_path: Path, seed: int, task_cfg: Dict[str, Any] | None = None):
-    """根据 env 配置构建评估环境，与训练时保持一致。"""
-    cfg = load_config(env_cfg_path)
-    env_id = cfg.get("env_id", "toy_uav")
-
-    if env_id == "toy_uav":
-        return ToyUavEnv.from_config(cfg, seed=seed)
-
-    if env_id == "pyflyt_navigation":
-        backend_cfg = cfg.get("backend", {})
-        num_agents = int(backend_cfg.get("num_agents", 1))
-        backend = PyFlytAviaryBackend(
-            num_agents=num_agents,
-            drone_type=backend_cfg.get("drone_type", "quadx"),
-            render=bool(backend_cfg.get("render", False)),
-            physics_hz=int(backend_cfg.get("physics_hz", 240)),
-            control_hz=int(backend_cfg.get("control_hz", 60)),
-            world_scale=float(backend_cfg.get("world_scale", 5.0)),
-            drone_options=backend_cfg.get("drone_options", {}) or {},
-            seed=seed + int(backend_cfg.get("seed_offset", 0)),
-            flight_mode=int(backend_cfg.get("flight_mode", 6)),
-        )
-
-        task_params = dict(task_cfg or {})
-        task_name = str(task_params.pop("name", "navigation"))
-
-        if task_name == "navigation":
-            task = NavigationTask(**task_params) if task_params else NavigationTask()
-        elif task_name == "pursuit_evasion_3v1":
-            task = PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()
-        elif task_name == "pursuit_evasion_3v1_ex1":
-            task = PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
-        elif task_name == "pursuit_evasion_3v1_ex2":
-            task = PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
-        else:
-            raise ValueError(f"Unsupported task name={task_name!r} for env_id={env_id!r}")
-        _aspace = str(cfg.get("action_space", "discrete")).lower()
-        _adim = int(cfg.get("action_dim", 4))
-        _alow, _ahigh = parse_continuous_action_bounds_from_env_cfg(
-            cfg, action_space=_aspace, action_dim=_adim
-        )
-        return PyFlytAviaryEnv(
-            backend=backend,
-            task=task,
-            seed=seed,
-            action_space=cfg.get("action_space", "discrete"),
-            action_dim=_adim,
-            action_low=_alow,
-            action_high=_ahigh,
-        )
-
-    raise ValueError(f"Unsupported env_id={env_id!r} in {env_cfg_path}")
+    """Build eval env through the same backend factory used by training."""
+    return build_env_from_config(env_cfg_path, seed=seed, task_cfg=task_cfg)
 
 
 def build_policy(
@@ -301,6 +230,12 @@ def _maybe_plot_navigation_trajectories(
     """若为 NavigationTask + PyFlytAviaryEnv，则绘制带动作着色的 3D 轨迹."""
     from dataclasses import dataclass
     from typing import Callable
+
+    try:
+        from marl_uav.envs.adapters.pyflyt_aviary_env import PyFlytAviaryEnv
+        from marl_uav.envs.tasks.navigation_task import NavigationTask
+    except ImportError:
+        return
 
     if not isinstance(env, PyFlytAviaryEnv) or not isinstance(env.task, NavigationTask):
         return
@@ -1108,7 +1043,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=str,
-        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
+        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml"),
         help="Top-level experiment config path.",
     )
     p.add_argument("--seed", type=int, default=203, help="Base eval seed.")
@@ -1166,9 +1101,9 @@ def main() -> None:
     exp_cfg_path = root / args.config
     exp_cfg = load_config(exp_cfg_path)
 
-    env_cfg_path = root / exp_cfg.get("env", "configs/env/toy_uav.yaml")
-    algo_cfg_path = root / exp_cfg.get("algo", "configs/algo/ippo.yaml")
-    model_cfg_path = root / exp_cfg.get("model", "configs/model/mlp.yaml")
+    env_cfg_path = root / exp_cfg.get("env", "configs/env/genesis_3v1.yaml")
+    algo_cfg_path = root / exp_cfg.get("algo", "configs/algo/dream_mappo.yaml")
+    model_cfg_path = root / exp_cfg.get("model", "configs/model/dream_mappo_centralized.yaml")
     task_cfg: Dict[str, Any] = exp_cfg.get("task", {}) or {}
 
     train_seed = int(args.train_seed) if args.train_seed is not None else int(exp_cfg.get("seed", args.seed))

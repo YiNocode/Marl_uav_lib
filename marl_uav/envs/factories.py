@@ -18,9 +18,64 @@ def build_env_from_config(
     """Build a single environment instance from config."""
     cfg = load_config(env_cfg_path)
     env_id = cfg.get("env_id", "toy_uav")
+    backend_spec = cfg.get("backend", "pyflyt")
+    backend_name = str(backend_spec).lower() if isinstance(backend_spec, str) else "pyflyt"
 
     if env_id == "toy_uav":
         return ToyUavEnv.from_config(cfg, seed=seed)
+
+    if backend_name == "genesis":
+        from marl_uav.envs.adapters.genesis_pursuit_env import GenesisPursuitEvasionEnv
+        from marl_uav.envs.backends.genesis_backend import GenesisBackend
+        from marl_uav.envs.tasks.pursuit_evasion_3v1_task import PursuitEvasion3v1Task
+        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
+            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx1,
+        )
+        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
+            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
+        )
+
+        task_params = dict(task_cfg or {})
+        task_name = str(task_params.pop("name", "pursuit_evasion_3v1_ex1"))
+        if task_name == "pursuit_evasion_3v1":
+            task = PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()
+        elif task_name == "pursuit_evasion_3v1_ex1":
+            task = PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
+        elif task_name == "pursuit_evasion_3v1_ex2":
+            task = PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
+        else:
+            raise ValueError(f"Unsupported task name={task_name!r} for Genesis backend")
+
+        action_space = str(cfg.get("action_space", "continuous")).lower()
+        action_dim = int(cfg.get("action_dim", 4))
+        action_low, action_high = parse_continuous_action_bounds_from_env_cfg(
+            cfg,
+            action_space=action_space,
+            action_dim=action_dim,
+        )
+
+        backend_cfg = dict(cfg.get("backend_config", {}) or {})
+        backend_cfg.setdefault("world_xy", float(getattr(task, "world_xy", 2.0)))
+        backend_cfg.setdefault("z_min", float(getattr(task, "z_min", 0.5)))
+        backend_cfg.setdefault("z_max", float(getattr(task, "z_max", 2.0)))
+        backend_cfg.setdefault("episode_limit", int(getattr(task, "episode_limit", 400)))
+        backend_cfg.setdefault("num_pursuers", 3)
+        backend_cfg.setdefault("num_evaders", 1)
+        if action_space == "continuous" and action_dim == 4:
+            backend_cfg.setdefault("velocity_low", action_low)
+            backend_cfg.setdefault("velocity_high", action_high)
+        backend_cfg.setdefault("seed", seed)
+        backend = GenesisBackend(**backend_cfg)
+
+        return GenesisPursuitEvasionEnv(
+            backend=backend,
+            task=task,
+            seed=seed,
+            action_space=action_space,
+            action_dim=action_dim,
+            action_low=action_low,
+            action_high=action_high,
+        )
 
     if env_id == "pyflyt_navigation":
         from marl_uav.envs.adapters.pyflyt_aviary_env import PyFlytAviaryEnv
@@ -34,7 +89,9 @@ def build_env_from_config(
             PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
         )
 
-        backend_cfg = cfg.get("backend", {})
+        if backend_name != "pyflyt":
+            raise ValueError(f"Unknown backend: {backend_name}")
+        backend_cfg = cfg.get("backend_config", {}) if isinstance(backend_spec, str) else cfg.get("backend", {})
         num_agents = int(backend_cfg.get("num_agents", 1))
         backend = PyFlytAviaryBackend(
             num_agents=num_agents,

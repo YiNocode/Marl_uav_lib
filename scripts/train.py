@@ -28,6 +28,10 @@ from marl_uav.utils.mp_context import default_vec_env_context
 from marl_uav.utils.torch_threading import configure_torch_threads
 from marl_uav.utils.env_action_bounds import boxed_action_bounds
 from marl_uav.utils.logger import Logger
+from marl_uav.utils.stdio import configure_utf8_stdio
+
+
+configure_utf8_stdio()
 
 
 def parse_args() -> argparse.Namespace:
@@ -250,6 +254,12 @@ def main() -> None:
     else:
         os.environ.pop("VEC_ENV_PROFILE_WORKERS", None)
 
+    results_dir = resolve_train_results_dir(root, train_cfg, args.train_config)
+    tb_log_dir = results_dir / "tb_" / str(seed)
+    tb_logger = Logger(log_dir=tb_log_dir)
+    tb_logger.log_scalar("run/alive", 1.0, 0)
+    tb_logger.flush()
+
     task_cfg = train_cfg.get("task", {})
     env = build_env(env_cfg_path, seed=seed, task_cfg=task_cfg)
 
@@ -258,12 +268,6 @@ def main() -> None:
             env.reset(seed=seed)
         except TypeError:
             env.reset()
-
-    results_dir = resolve_train_results_dir(root, train_cfg, args.train_config)
-    tb_log_dir = results_dir / "tb_" / str(seed)
-    tb_logger = Logger(log_dir=tb_log_dir)
-    tb_logger.log_scalar("run/alive", 1.0, 0)
-    tb_logger.flush()
 
     train_device = resolve_train_device(train_cfg)
     print(f"[train] device={train_device} (policy/learner on this device)")

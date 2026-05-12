@@ -1,0 +1,38 @@
+# Genesis 3v1 pursuit-evasion backend config.
+#
+# This config intentionally keeps the high-level action space equal to
+# configs/env/pyflyt_3v1.yaml. The task still outputs velocity setpoints
+# [vx, vy, yaw_rate, vz]; GenesisBackend converts them to rotor RPM commands.
+
+env_id: genesis_pursuit_3v1
+backend: genesis
+action_space: continuous
+action_dim: 4
+# High-level task action: [vx, vy, yaw_rate, vz].
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
+
+backend_config:
+  # Set headless: true for server training. Use false only for local visual debug.
+  headless: true
+  # Genesis init backend: gpu or cpu. Genesis is imported only when this backend is requested.
+  device: gpu
+  dt: 0.01
+  gravity: [0.0, 0.0, -9.81]
+  # Project-level VecEnv uses num_envs in the train config; keep Genesis scene n_envs=1 here.
+  n_envs: 1
+  # DroneEntity model from Genesis docs.
+  drone_model: CF2X
+  drone_urdf: urdf/drones/cf2x.urdf
+  # RPM controller range and nominal hover point for CF2X.
+  max_rpm: 25000.0
+  hover_rpm: 14475.8
+  # velocity: task setpoints -> RPM PID mixer. rpm: direct [rpm0..rpm3].
+  action_type: velocity
+  low_level_control: rpm_pid
+  num_pursuers: 3
+  num_evaders: 1
+  rpm_pid:
+    kx: 1800.0
+    ky: 1800.0
+    kz: 2600.0

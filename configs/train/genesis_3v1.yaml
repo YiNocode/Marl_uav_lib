@@ -1,22 +1,19 @@
-# Dream-MAPPO ex2 on PyFlyt 3v1 pursuit with cylindrical obstacles.
+# Genesis-backed Dream-MAPPO ex2 training config.
 #
-# ex2 extends ex1 with obstacle-aware manifold terms and obstacle penalties.
-# The Genesis counterpart is:
-#   configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml
+# Kept for compatibility with the earlier Genesis entrypoint. It mirrors the
+# PyFlyt ex2 training settings and uses configs/env/genesis_3v1.yaml.
 
-env: configs/env/pyflyt_3v1.yaml
+env: configs/env/genesis_3v1.yaml
 algo: configs/algo/dream_mappo.yaml
 model: configs/model/dream_mappo_centralized.yaml
 
 task:
   name: pursuit_evasion_3v1_ex2
-  # Arena / episode settings.
   world_xy: 20.0
   z_min: 0.5
   z_max: 5.0
-  capture_dist: 1
+  capture_dist: 1.0
   episode_limit: 1000
-  # High-level pursuit speeds and reward scales.
   pursuer_speed: 0.15
   evader_speed: 0.08
   min_pursuer_sep: 0.6
@@ -31,7 +28,6 @@ task:
   capture_bonus_team: 30.0
   capture_bonus_individual: 10.0
   progress_dist_norm: 2.0
-  # ex1 structure-aware reward terms retained in ex2.
   structure_reward_scale: 0.22
   structure_improve_scale: 0.16
   structure_hold_reward_scale: 0.03
@@ -42,7 +38,6 @@ task:
   structure_col_threshold: 0.35
   structure_ang_threshold: 0.75
   structure_hold_steps_cap: 30
-  # ex2 manifold contraction / role-assignment shaping.
   radial_compress_reward_scale: 1.8
   radial_overshoot_penalty_scale: 0.28
   contraction_phase_structure_scale: 0.25
@@ -54,7 +49,6 @@ task:
   residual_control_gain_decay_epochs: 30000
   progress_gate_min_scale: 0.85
   role_progress_reward_scale: 0.95
-  # Cylindrical obstacle manifold and collision settings.
   obstacle_manifold_top_k: 4
   obstacle_manifold_influence_radius_scale: 2.5
   obstacle_manifold_clearance_margin_scale: 0.35
