@@ -15,11 +15,18 @@ action_high: [0.25, 0.25, 0.01, 0.15]
 backend_config:
   # Set headless: true for server training. Use false only for local visual debug.
   headless: true
+  # eval.py --render overrides headless and uses run_in_thread: false on Windows
+  # to avoid PyGlet viewer thread errors. Genesis records videos to
+  # ~/.cache/genesis when pressing r in the interactive viewer; the backend
+  # creates that folder automatically before scene creation.
+  viewer_options:
+    run_in_thread: false
   # Genesis init backend: gpu or cpu. Genesis is imported only when this backend is requested.
   device: gpu
   dt: 0.01
   gravity: [0.0, 0.0, -9.81]
-  # Project-level VecEnv uses num_envs in the train config; keep Genesis scene n_envs=1 here.
+  # scripts/train.py overrides this with train.num_envs for native Genesis parallel training.
+  # Keep this at 1 for single-env smoke tests and evaluation.
   n_envs: 1
   # DroneEntity model from Genesis docs.
   drone_model: CF2X

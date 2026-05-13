@@ -24,6 +24,30 @@ class SimBackendState:
     elapsed_time: float
 
 
+@dataclass
+class BatchedSimBackendState:
+    """Vectorized backend state layout for native simulator parallelism.
+
+    ``states`` uses ``[num_envs, num_agents, 4, 3]``.  Each environment slice is
+    compatible with :class:`SimBackendState`, which keeps existing task code
+    reusable for both single-env and native-vector Genesis rollouts.
+    """
+
+    states: np.ndarray
+    aux_states: list[list[np.ndarray]]
+    contact_array: np.ndarray
+    elapsed_time: np.ndarray
+
+    def env_state(self, env_idx: int) -> SimBackendState:
+        """Return a single environment view for existing task implementations."""
+        return SimBackendState(
+            states=np.asarray(self.states[env_idx], dtype=np.float32),
+            aux_states=list(self.aux_states[env_idx]),
+            contact_array=np.asarray(self.contact_array[env_idx], dtype=np.int8),
+            elapsed_time=float(np.asarray(self.elapsed_time).reshape(-1)[env_idx]),
+        )
+
+
 class BaseSimBackend(ABC):
     """Small contract shared by physics backend adapters."""
 

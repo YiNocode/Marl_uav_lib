@@ -18,7 +18,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from marl_uav.agents.mac import MAC
-from marl_uav.envs.factories import build_env_from_config
+from marl_uav.envs.factories import build_env_from_config_dict
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task import (
     PursuitEvasion3v1Task,
     compute_pursuit_structure_metrics_3v1,
@@ -50,9 +50,24 @@ PURSUIT_EVASION_3V1_TASK_TYPES = (
     PursuitEvasion3v1TaskEx2,
 )
 
-def build_env(env_cfg_path: Path, seed: int, task_cfg: Dict[str, Any] | None = None):
+def build_env(
+    env_cfg_path: Path,
+    seed: int,
+    task_cfg: Dict[str, Any] | None = None,
+    *,
+    render: bool | None = None,
+):
     """Build eval env through the same backend factory used by training."""
-    return build_env_from_config(env_cfg_path, seed=seed, task_cfg=task_cfg)
+    env_cfg = load_config(env_cfg_path)
+    if render is not None and str(env_cfg.get("backend", "pyflyt")).lower() == "genesis":
+        backend_cfg = dict(env_cfg.get("backend_config", {}) or {})
+        backend_cfg["headless"] = not bool(render)
+        if render:
+            viewer_options = dict(backend_cfg.get("viewer_options", {}) or {})
+            viewer_options.setdefault("run_in_thread", False)
+            backend_cfg["viewer_options"] = viewer_options
+        env_cfg["backend_config"] = backend_cfg
+    return build_env_from_config_dict(env_cfg, seed=seed, task_cfg=task_cfg, env_cfg_path=env_cfg_path)
 
 
 def build_policy(
@@ -1043,7 +1058,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=str,
-        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml"),
+        default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1_genesis.yaml"),
         help="Top-level experiment config path.",
     )
     p.add_argument("--seed", type=int, default=203, help="Base eval seed.")
@@ -1058,11 +1073,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ckpt",
         type=str,
-        default="",
+        default="results/best.pt",
         help=(
             "Optional explicit checkpoint path. By default eval loads "
             "results/<exp_name>/checkpoints/<train_seed>/best.pt."
         ),
+    )
+    render_group = p.add_mutually_exclusive_group()
+    render_group.add_argument(
+        "--render",
+        action="store_true",
+        help="For Genesis eval, open the interactive viewer instead of running headless.",
+    )
+    render_group.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force Genesis eval to run without an interactive viewer.",
     )
     return p.parse_args()
 
@@ -1105,6 +1131,12 @@ def main() -> None:
     algo_cfg_path = root / exp_cfg.get("algo", "configs/algo/dream_mappo.yaml")
     model_cfg_path = root / exp_cfg.get("model", "configs/model/dream_mappo_centralized.yaml")
     task_cfg: Dict[str, Any] = exp_cfg.get("task", {}) or {}
+    render_override = True if args.render else (False if args.headless else None)
+    if args.render and (int(args.num_seeds) * int(args.episodes) > 1):
+        print(
+            "[Eval] Genesis interactive rendering is best for short visual checks; "
+            "consider --num-seeds 1 --episodes 1 for smoother viewer playback."
+        )
 
     train_seed = int(args.train_seed) if args.train_seed is not None else int(exp_cfg.get("seed", args.seed))
     ckpt_path = resolve_checkpoint_path(
@@ -1121,7 +1153,7 @@ def main() -> None:
         )
 
     # 构建环境 / 策略 / learner，并从 checkpoint 恢复参数
-    env = build_env(env_cfg_path, seed=eval_seed, task_cfg=task_cfg)
+    env = build_env(env_cfg_path, seed=eval_seed, task_cfg=task_cfg, render=render_override)
     # 若环境还未初始化 obs_dim/state_dim，则在构建 policy 前先 reset 一次
     if getattr(env, "obs_dim", None) is None or getattr(env, "state_dim", None) is None:
         try:
@@ -1141,7 +1173,8 @@ def main() -> None:
     ):
         compat_task_cfg = dict(task_cfg)
         compat_task_cfg["structure_obs_include_deltas"] = False
-        env = build_env(env_cfg_path, seed=eval_seed, task_cfg=compat_task_cfg)
+        env.close()
+        env = build_env(env_cfg_path, seed=eval_seed, task_cfg=compat_task_cfg, render=render_override)
         try:
             env.reset(seed=eval_seed)
         except TypeError:
@@ -1236,6 +1269,8 @@ def main() -> None:
         else:
             results_root = results_dir
         _plot_pursuit_evasion_trajectories_from_data(trajectories, results_root)
+
+    env.close()
 
 
 if __name__ == "__main__":

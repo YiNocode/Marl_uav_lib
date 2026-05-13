@@ -10,6 +10,37 @@ from marl_uav.utils.config import load_config
 from marl_uav.utils.env_action_bounds import parse_continuous_action_bounds_from_env_cfg
 
 
+def build_pursuit_task_from_config(
+    task_cfg: dict[str, Any] | None,
+    *,
+    default_name: str,
+):
+    """Build one of the supported 3v1 pursuit task variants."""
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task import PursuitEvasion3v1Task
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
+        PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx1,
+    )
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
+        PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
+    )
+
+    task_params = dict(task_cfg or {})
+    task_name = str(task_params.pop("name", default_name))
+    if task_name == "pursuit_evasion_3v1":
+        return PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()
+    if task_name == "pursuit_evasion_3v1_ex1":
+        return PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
+    if task_name == "pursuit_evasion_3v1_ex2":
+        return PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
+    raise ValueError(f"Unsupported pursuit task name={task_name!r}")
+
+
+def env_config_uses_genesis(env_cfg_path: Path) -> bool:
+    """Return whether an env YAML requests the Genesis backend."""
+    cfg = load_config(env_cfg_path)
+    return str(cfg.get("backend", "pyflyt")).lower() == "genesis"
+
+
 def build_env_from_config(
     env_cfg_path: Path,
     seed: int,
@@ -17,6 +48,17 @@ def build_env_from_config(
 ):
     """Build a single environment instance from config."""
     cfg = load_config(env_cfg_path)
+    return build_env_from_config_dict(cfg, seed=seed, task_cfg=task_cfg, env_cfg_path=env_cfg_path)
+
+
+def build_env_from_config_dict(
+    cfg: dict[str, Any],
+    *,
+    seed: int,
+    task_cfg: dict[str, Any] | None = None,
+    env_cfg_path: Path | None = None,
+):
+    """Build a single environment from an already loaded env config."""
     env_id = cfg.get("env_id", "toy_uav")
     backend_spec = cfg.get("backend", "pyflyt")
     backend_name = str(backend_spec).lower() if isinstance(backend_spec, str) else "pyflyt"
@@ -27,24 +69,8 @@ def build_env_from_config(
     if backend_name == "genesis":
         from marl_uav.envs.adapters.genesis_pursuit_env import GenesisPursuitEvasionEnv
         from marl_uav.envs.backends.genesis_backend import GenesisBackend
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task import PursuitEvasion3v1Task
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
-            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx1,
-        )
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
-            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
-        )
 
-        task_params = dict(task_cfg or {})
-        task_name = str(task_params.pop("name", "pursuit_evasion_3v1_ex1"))
-        if task_name == "pursuit_evasion_3v1":
-            task = PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()
-        elif task_name == "pursuit_evasion_3v1_ex1":
-            task = PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
-        elif task_name == "pursuit_evasion_3v1_ex2":
-            task = PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
-        else:
-            raise ValueError(f"Unsupported task name={task_name!r} for Genesis backend")
+        task = build_pursuit_task_from_config(task_cfg, default_name="pursuit_evasion_3v1_ex1")
 
         action_space = str(cfg.get("action_space", "continuous")).lower()
         action_dim = int(cfg.get("action_dim", 4))
@@ -81,13 +107,6 @@ def build_env_from_config(
         from marl_uav.envs.adapters.pyflyt_aviary_env import PyFlytAviaryEnv
         from marl_uav.envs.backends.pyflyt_aviary_backend import PyFlytAviaryBackend
         from marl_uav.envs.tasks.navigation_task import NavigationTask
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task import PursuitEvasion3v1Task
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
-            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx1,
-        )
-        from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
-            PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
-        )
 
         if backend_name != "pyflyt":
             raise ValueError(f"Unknown backend: {backend_name}")
@@ -106,16 +125,12 @@ def build_env_from_config(
         )
 
         task_params = dict(task_cfg or {})
-        task_name = str(task_params.pop("name", "navigation"))
-
+        task_name = str(task_params.get("name", "navigation"))
         if task_name == "navigation":
+            task_params.pop("name", None)
             task = NavigationTask(**task_params) if task_params else NavigationTask()
-        elif task_name == "pursuit_evasion_3v1":
-            task = PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()
-        elif task_name == "pursuit_evasion_3v1_ex1":
-            task = PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
-        elif task_name == "pursuit_evasion_3v1_ex2":
-            task = PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
+        elif task_name.startswith("pursuit_evasion_3v1"):
+            task = build_pursuit_task_from_config(task_cfg, default_name="pursuit_evasion_3v1")
         else:
             raise ValueError(f"Unsupported task name={task_name!r} for env_id={env_id!r}")
 
@@ -136,4 +151,5 @@ def build_env_from_config(
             action_high=action_high,
         )
 
-    raise ValueError(f"Unsupported env_id={env_id!r} in {env_cfg_path}")
+    source = "" if env_cfg_path is None else f" in {env_cfg_path}"
+    raise ValueError(f"Unsupported env_id={env_id!r}{source}")

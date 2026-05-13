@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--experiment",
         choices=("ex1", "ex2"),
-        default="ex2",
+        default="ex1",
         help="Pick the Dream-MAPPO pursuit experiment when --config is omitted.",
     )
     p.add_argument(

@@ -11,7 +11,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from marl_uav.agents.mac import MAC
-from marl_uav.envs.factories import build_env_from_config
+from marl_uav.envs.factories import build_env_from_config, env_config_uses_genesis
+from marl_uav.envs.genesis_vec_env_manager import GenesisVecEnvManager
 from marl_uav.envs.vec_env_manager import VecEnvManager
 from marl_uav.learners.on_policy import IPPOLearner, MAPPOLearner, SCMAPPOLearner
 from marl_uav.policies.actor_critic_policy import ActorCriticPolicy
@@ -248,7 +249,8 @@ def main() -> None:
     vec_env_copy = bool(train_cfg.get("vec_env_copy", False))
     profile_timing = bool(train_cfg.get("vec_env_profile_timing", False))
 
-    configure_torch_threads(num_envs=num_envs, train_cfg=train_cfg)
+    use_genesis_native_vec = env_config_uses_genesis(env_cfg_path) and num_envs > 1
+    configure_torch_threads(num_envs=1 if use_genesis_native_vec else num_envs, train_cfg=train_cfg)
     if profile_timing and num_envs > 1:
         os.environ["VEC_ENV_PROFILE_WORKERS"] = "1"
     else:
@@ -290,20 +292,36 @@ def main() -> None:
     rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
     vec_env_manager = None
     if num_envs > 1:
-        print(
-            "[train] creating VecEnvManager "
-            f"(num_envs={num_envs}, context={vec_env_context}, "
-            f"shared_memory={vec_env_shared_memory}, copy={vec_env_copy})"
-        )
-        vec_env_manager = VecEnvManager(
-            env_cfg_path=env_cfg_path,
-            task_cfg=task_cfg,
-            num_envs=num_envs,
-            seed=seed,
-            context=vec_env_context,
-            shared_memory=vec_env_shared_memory,
-            copy=vec_env_copy,
-        )
+        if use_genesis_native_vec:
+            print(
+                "[train] creating GenesisVecEnvManager "
+                f"(num_envs={num_envs}, native Genesis scene replication, no subprocess workers)"
+            )
+            # The single env was only needed to infer obs/state dimensions and
+            # action bounds. Close its scene before constructing the native
+            # Genesis batch to avoid multiple live scenes in one process.
+            env.close()
+            vec_env_manager = GenesisVecEnvManager(
+                env_cfg_path=env_cfg_path,
+                task_cfg=task_cfg,
+                num_envs=num_envs,
+                seed=seed,
+            )
+        else:
+            print(
+                "[train] creating VecEnvManager "
+                f"(num_envs={num_envs}, context={vec_env_context}, "
+                f"shared_memory={vec_env_shared_memory}, copy={vec_env_copy})"
+            )
+            vec_env_manager = VecEnvManager(
+                env_cfg_path=env_cfg_path,
+                task_cfg=task_cfg,
+                num_envs=num_envs,
+                seed=seed,
+                context=vec_env_context,
+                shared_memory=vec_env_shared_memory,
+                copy=vec_env_copy,
+            )
         trainer = VecEnvTrainer(
             vec_env_manager=vec_env_manager,
             policy=mac,
@@ -340,6 +358,9 @@ def main() -> None:
         if vec_env_manager is not None:
             vec_env_manager.close()
 
+    if use_genesis_native_vec:
+        env = build_env(env_cfg_path, seed=seed + 10_000, task_cfg=task_cfg)
+        rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
     evaluator = Evaluator(rollout_worker)
     eval_metrics, _ = evaluator.run(num_episodes=eval_episodes, seed=seed + 10_000)
 

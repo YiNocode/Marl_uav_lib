@@ -46,6 +46,7 @@ task:
   structure_hold_steps_cap: 30
 
 seed: 205
+# Genesis uses native scene replication for this value; no subprocess VecEnv is spawned.
 num_envs: 8
 num_epochs: 30000
 rollout_steps: 1024
