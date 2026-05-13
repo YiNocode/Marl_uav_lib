@@ -1,0 +1,32 @@
+# E1.1 main benchmark suite: open-space / obstacle-free PyFlyt.
+
+suite: E1
+scenario: e1_1_open_space
+backend: pyflyt
+result_root: results/e1_1_open_space_pyflyt
+generated_config_dir: configs/generated/e1_1_open_space
+
+seeds: [101, 102, 103]
+eval:
+  base_seed: 7010
+  episodes_per_seed: 200
+  terminal_window: 30
+
+methods:
+  mappo:
+    kind: rl
+    config: configs/experiment/e1_1_open_space_pyflyt_mappo.yaml
+    train: true
+  reward_shaped_mappo:
+    kind: rl
+    config: configs/experiment/e1_1_open_space_pyflyt_reward_shaped_mappo.yaml
+    train: true
+  fixed_ring:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_fixed_ring.yaml
+    train: false
+  dream_mappo_full:
+    kind: rl
+    config: configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml
+    train: true
+
