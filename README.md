@@ -2,7 +2,7 @@
 
 面向 3v1 无人机追逃实验的 MARL 研究代码。当前主线是 **Dream-MAPPO**，支持两类仿真后端：
 
-- **Genesis**：新的主要无人机仿真后端，使用 Genesis DroneEntity 和 RPM 控制。
+- **Genesis**：新的主要无人机仿真后端，使用 Genesis DroneEntity 和 `set_pos` 控制。
 - **PyFlyt**：保留的兼容后端，用于复现实验和对照。
 
 本文只保留与 Dream-MAPPO、Genesis、PyFlyt、ex1/ex2 实验直接相关的内容。
@@ -32,7 +32,7 @@ Genesis 版 ex1/ex2 的训练参数与对应 PyFlyt 配置保持一致，主要�
 - 环境配置：`configs/env/genesis_3v1.yaml`
 - 后端选择：`backend: genesis`
 - 动作空间：连续 `[vx, vy, yaw_rate, vz]`，动作上下界与 PyFlyt 3v1 保持一致。
-- 控制路径：task 输出高层速度 setpoint，`GenesisBackend` 转换为四旋翼 RPM。
+- 控制路径：task 输出高层速度 setpoint，`GenesisBackend` 读取当前 `pos`，用第 0、1、3 维按 `pos + [vx, vy, vz] * dt` 生成下一步目标位置并调用 `set_pos`。
 - Genesis 是可选依赖，只在请求 Genesis 后端时导入；未安装 Genesis 时 PyFlyt 路径不受影响。
 
 **PyFlyt 后端**
@@ -201,8 +201,7 @@ pytest tests/test_genesis_backend_smoke.py -q
 - `backend_config.device: gpu | cpu`
 - `backend_config.headless: true | false`
 - `backend_config.dt`
-- `backend_config.hover_rpm`
-- `backend_config.max_rpm`
+- `backend_config.low_level_control: set_pos`
 
 ## 常见问题
 
@@ -223,7 +222,7 @@ results/guarded_dream_mappo_runs/<config_stem>_<timestamp>/tb_/<seed>/
 
 ## 关键配置文件
 
-- `configs/env/genesis_3v1.yaml`：Genesis DroneEntity 后端、RPM 控制器、动作范围。
+- `configs/env/genesis_3v1.yaml`：Genesis DroneEntity 后端、`set_pos` 控制、动作范围。
 - `configs/env/pyflyt_3v1.yaml`：PyFlyt 兼容后端、动作范围、渲染/频率设置。
 - `configs/algo/dream_mappo.yaml`：Dream-MAPPO 的 PPO/MAPPO 训练超参。
 - `configs/model/dream_mappo_centralized.yaml`：Dream-MAPPO actor/critic 网络与几何动作头参数。

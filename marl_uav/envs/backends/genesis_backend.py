@@ -22,13 +22,12 @@ from marl_uav.envs.backends.base_backend import (
 
 
 class GenesisBackend(BaseSimBackend):
-    """Thin Genesis scene wrapper with velocity-to-RPM control.
+    """Thin Genesis scene wrapper with direct Genesis set_pos control.
 
     The high-level MARL tasks emit velocity setpoints in the existing project
-    convention ``[vx, vy, yaw_rate, vz]``. For ``action_type="velocity"``, this
-    backend translates those setpoints to four motor RPMs with a simple
-    stabilizing mixer. For ``action_type="rpm"``, actions are passed through as
-    raw motor commands after clipping.
+    convention ``[vx, vy, yaw_rate, vz]``. Genesis control integrates those
+    velocities into per-step target positions and calls ``set_pos`` with the
+    resulting ``pos + [vx, vy, vz] * dt`` command.
     """
 
     _initialized = False
@@ -53,7 +52,7 @@ class GenesisBackend(BaseSimBackend):
         device: str = "gpu",
         gravity: list[float] | tuple[float, float, float] = (0.0, 0.0, -9.81),
         action_type: str = "velocity",
-        low_level_control: str = "rpm_pid",
+        low_level_control: str = "set_pos",
         viewer_options: dict[str, Any] | None = None,
         velocity_low: list[float] | None = None,
         velocity_high: list[float] | None = None,
@@ -77,8 +76,6 @@ class GenesisBackend(BaseSimBackend):
         self.n_envs = int(n_envs)
         self.drone_model = str(drone_model)
         self.drone_urdf = str(drone_urdf)
-        self.max_rpm = float(max_rpm)
-        self.hover_rpm = float(hover_rpm)
         self.headless = bool(headless)
         self.device = str(device).lower()
         self.gravity = tuple(float(x) for x in gravity)
@@ -87,8 +84,12 @@ class GenesisBackend(BaseSimBackend):
         self.viewer_options = dict(viewer_options or {})
         self.seed = seed
 
-        if self.action_type not in ("velocity", "rpm"):
+        if self.action_type not in ("velocity",):
             raise ValueError(f"Unsupported Genesis action_type={action_type!r}")
+        if self.low_level_control != "set_pos":
+            raise ValueError(
+                "Genesis low_level_control now only supports 'set_pos'; RPM control is deprecated."
+            )
 
         self.velocity_low = (
             np.asarray(velocity_low, dtype=np.float32).reshape(-1)
@@ -102,11 +103,7 @@ class GenesisBackend(BaseSimBackend):
         )
         if self.velocity_low.size != 4 or self.velocity_high.size != 4:
             raise ValueError("Genesis velocity_low/high must have 4 entries [vx, vy, yaw_rate, vz].")
-
-        pid_cfg = rpm_pid or {}
-        self.kx = float(pid_cfg.get("kx", 1800.0))
-        self.ky = float(pid_cfg.get("ky", 1800.0))
-        self.kz = float(pid_cfg.get("kz", 2600.0))
+        _ = (max_rpm, hover_rpm, rpm_pid)  # Deprecated RPM config keys are accepted but ignored.
 
         self.scene = None
         self.drones: list[Any] = []
@@ -132,7 +129,7 @@ class GenesisBackend(BaseSimBackend):
 
         backend = self.gs.gpu if self.device == "gpu" else self.gs.cpu
         try:
-            self.gs.init(backend=backend, logging_level="warning")
+            self.gs.init(backend=backend, logging_level="error")
         except TypeError:
             self.gs.init(backend=backend)
         GenesisBackend._initialized = True
@@ -288,7 +285,7 @@ class GenesisBackend(BaseSimBackend):
             self.scene.build()
 
     def step(self, actions: np.ndarray) -> SimBackendState:
-        """Send one RPM command per drone and advance the Genesis scene."""
+        """Send one ``set_pos`` command per drone and advance the Genesis scene."""
         actions_arr = np.asarray(actions, dtype=np.float32)
         if actions_arr.ndim == 3:
             return self.step_batched(actions_arr).env_state(0)
@@ -297,7 +294,7 @@ class GenesisBackend(BaseSimBackend):
         return batched.env_state(0)
 
     def step_batched(self, actions: np.ndarray) -> BatchedSimBackendState:
-        """Advance all native Genesis environments with batched RPM commands."""
+        """Advance all native Genesis environments with batched ``set_pos`` commands."""
         if self.scene is None or not self.drones:
             raise RuntimeError("Genesis scene is not initialized. Call reset() first.")
 
@@ -308,17 +305,17 @@ class GenesisBackend(BaseSimBackend):
             )
 
         self._last_setpoints = setpoints.copy()
-        current_vel = self._current_velocity_fallback_safe()
-        rpms = self._actions_to_rpms(setpoints, current_vel)
+        vel_cmds = self._actions_to_velocity_commands(setpoints)
 
         for agent_idx, drone in enumerate(self.drones):
-            cmd = self._format_rpm_command(rpms[:, agent_idx, :])
-            setter = getattr(drone, "set_propellers_rpm", None)
-            if setter is None:
-                raise AttributeError(
-                    "Genesis Drone entity does not has set_propellers_rpm."
-                )
-            setter(cmd)
+            current_pos = self._read_vec_batched(
+                drone,
+                ("get_pos", "get_position"),
+                self._fallback_pos[:, agent_idx, :],
+            )
+            pos_cmd = self._velocity_to_set_pos_command(current_pos, vel_cmds[:, agent_idx, :])
+            cmd = self._format_set_pos_command(pos_cmd)
+            self._call_control_set_pos(drone, cmd)
 
         self.scene.step()
         self._update_viewer()
@@ -327,12 +324,12 @@ class GenesisBackend(BaseSimBackend):
         self._integrate_fallback(setpoints)
         return self.get_batched_backend_state()
 
-    def _format_rpm_command(self, rpm: np.ndarray) -> np.ndarray:
-        """Match Genesis single-env or batched RPM command shape."""
-        rpm = np.asarray(rpm, dtype=np.float32)
+    def _format_set_pos_command(self, cmd: np.ndarray) -> np.ndarray:
+        """Match Genesis single-env or batched set_pos command shape."""
+        cmd = np.asarray(cmd, dtype=np.float32)
         if self.n_envs > 1:
-            return rpm.reshape(self.n_envs, 4)
-        return rpm.reshape(4)
+            return cmd.reshape(self.n_envs, 3)
+        return cmd.reshape(3)
 
     def _make_viewer_options(self) -> Any | None:
         """Create Genesis viewer options with a Windows-safe threading default.
@@ -372,43 +369,53 @@ class GenesisBackend(BaseSimBackend):
         except TypeError:
             update(force=True)
 
-    def _actions_to_rpms(self, actions: np.ndarray, current_vel: np.ndarray) -> np.ndarray:
-        """Convert high-level actions to clipped motor RPMs.
+    def _actions_to_velocity_commands(self, actions: np.ndarray) -> np.ndarray:
+        """Convert ``[vx, vy, yaw_rate, vz]`` setpoints to ``[vx, vy, vz]``."""
+        if actions.shape[-1] < 4:
+            raise ValueError(f"Genesis velocity action expects at least 4 entries, got {actions.shape}")
+        clipped = np.clip(actions[..., :4], self.velocity_low, self.velocity_high)
+        clipped = np.nan_to_num(clipped, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.stack(
+            [clipped[..., 0], clipped[..., 1], clipped[..., 3]],
+            axis=-1,
+        ).astype(np.float32)
 
-        The velocity mixer is intentionally simple: vertical velocity error
-        shifts collective thrust, while target x/y velocities create pitch and
-        roll deltas. Yaw is ignored in the first integration to preserve stable
-        translational control.
-        """
-        if self.action_type == "rpm":
-            if actions.shape[-1] != 4:
-                raise ValueError(f"RPM action_type expects action shape [N, 4], got {actions.shape}")
-            rpms = actions.astype(np.float32)
-        else:
-            clipped = np.clip(actions[..., :4], self.velocity_low, self.velocity_high)
-            clipped = np.nan_to_num(clipped, nan=0.0, posinf=0.0, neginf=0.0)
-            target_vx = clipped[..., 0]
-            target_vy = clipped[..., 1]
-            target_vz = clipped[..., 3]
-            curr_vz = current_vel[..., 2]
+    def _velocity_to_set_pos_command(self, current_pos: np.ndarray, vel_cmd: np.ndarray) -> np.ndarray:
+        """Integrate a velocity command into the next Genesis set_pos target."""
+        current_pos = np.asarray(current_pos, dtype=np.float32).reshape(-1, 3)
+        vel_cmd = np.asarray(vel_cmd, dtype=np.float32).reshape(-1, 3)
+        if current_pos.shape != vel_cmd.shape:
+            raise ValueError(f"current_pos shape {current_pos.shape} does not match vel_cmd shape {vel_cmd.shape}")
+        pos_cmd = current_pos + vel_cmd * np.float32(self._control_dt()) * 10
+        pos_cmd[:, 0] = np.clip(pos_cmd[:, 0], -self.world_xy, self.world_xy)
+        pos_cmd[:, 1] = np.clip(pos_cmd[:, 1], -self.world_xy, self.world_xy)
+        pos_cmd[:, 2] = np.clip(pos_cmd[:, 2], self.z_min, self.z_max)
+        return np.nan_to_num(pos_cmd, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-            base = self.hover_rpm + self.kz * (target_vz - curr_vz)
-            pitch_delta = self.kx * target_vx
-            roll_delta = self.ky * target_vy
-            yaw_delta = np.zeros_like(base)
+    def _control_dt(self) -> float:
+        scene = getattr(self, "scene", None)
+        if scene is None:
+            return self.dt
+        try:
+            return float(getattr(scene, "dt"))
+        except (AttributeError, TypeError, ValueError):
+            return self.dt
 
-            rpms = np.stack(
-                [
-                    base + pitch_delta + roll_delta - yaw_delta,
-                    base + pitch_delta - roll_delta + yaw_delta,
-                    base - pitch_delta - roll_delta - yaw_delta,
-                    base - pitch_delta + roll_delta + yaw_delta,
-                ],
-                axis=-1,
-            )
-
-        rpms = np.nan_to_num(rpms, nan=self.hover_rpm, posinf=self.max_rpm, neginf=0.0)
-        return np.clip(rpms, 0.0, self.max_rpm).astype(np.float32)
+    def _call_control_set_pos(self, drone: Any, cmd: np.ndarray) -> None:
+        setter = getattr(drone, "set_pos", None)
+        if setter is None:
+            raise AttributeError("Genesis Drone entity does not have set_pos.")
+        candidates = [None, {"pos": cmd}, {"value": cmd}]
+        for kwargs in candidates:
+            try:
+                if kwargs is None:
+                    setter(cmd)
+                else:
+                    setter(**kwargs)
+                return
+            except TypeError:
+                continue
+        setter(cmd)
 
     def get_backend_state(self) -> SimBackendState:
         """Read state from Genesis and package it in the task-compatible layout."""
