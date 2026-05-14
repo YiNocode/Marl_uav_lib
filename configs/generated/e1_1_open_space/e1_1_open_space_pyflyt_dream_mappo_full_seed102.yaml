@@ -55,7 +55,7 @@ task:
   manifold_structure_gate_scale: 0.75
 seed: 102
 num_envs: 8
-num_epochs: 10000
+num_epochs: 1000
 rollout_steps: 1024
 log_interval: 1
 eval_episodes: 20
