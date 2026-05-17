@@ -39,8 +39,7 @@ task:
 
 seed: 101
 num_envs: 8
-num_epochs: 10000
-rollout_steps: 2048
+num_epochs: 3000
+rollout_steps: 1024
 log_interval: 1
 eval_episodes: 20
-

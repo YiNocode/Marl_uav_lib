@@ -1,8 +1,9 @@
-﻿benchmark:
+benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: reward_shaped_mappo
-  description: MAPPO with ex1 structure observations plus structure/radial reward shaping; no DREAM manifold policy.
+  description: MAPPO with ex1 structure observations plus structure/radial reward
+    shaping; no DREAM manifold policy.
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml
 model: configs/model/centralized_critic.yaml
@@ -15,7 +16,7 @@ task:
   capture_dist: 1.0
   episode_limit: 1000
   pursuer_speed: 0.15
-  evader_speed: 0.20
+  evader_speed: 0.2
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -52,8 +53,7 @@ task:
   manifold_structure_gate_scale: 0.75
 seed: 102
 num_envs: 8
-num_epochs: 10000
-rollout_steps: 2048
+num_epochs: 3000
+rollout_steps: 1024
 log_interval: 1
 eval_episodes: 20
-

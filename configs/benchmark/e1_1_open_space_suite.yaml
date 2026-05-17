@@ -6,7 +6,7 @@ backend: pyflyt
 result_root: results/e1_1_open_space_pyflyt
 generated_config_dir: configs/generated/e1_1_open_space
 
-seeds: [101, 102, 103]
+seeds: [101]
 eval:
   base_seed: 7010
   episodes_per_seed: 200
