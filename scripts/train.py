@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 from pathlib import Path
@@ -173,6 +174,33 @@ def resolve_train_results_dir(root: Path, train_cfg: dict[str, Any], train_confi
     return p.resolve() if p.is_absolute() else (root / p).resolve()
 
 
+def resolve_vec_rollout_steps(
+    *,
+    rollout_steps: int,
+    num_envs: int,
+    train_cfg: dict[str, Any],
+) -> int:
+    """Resolve rollout length passed to VecEnvTrainer.
+
+    Historically VecEnvTrainer interpreted ``rollout_steps`` as per-env steps,
+    so ``num_envs=8, rollout_steps=1024`` collected 8192 transitions before one
+    PPO update. For benchmark configs that want the old single-env update
+    cadence, set ``vec_rollout_steps_mode: total`` and ``rollout_steps`` is
+    treated as the target total env steps per update.
+    """
+    steps = max(int(rollout_steps), 1)
+    envs = max(int(num_envs), 1)
+    mode = str(train_cfg.get("vec_rollout_steps_mode", "per_env")).strip().lower()
+    if envs <= 1 or mode in ("per_env", "per-env", "worker"):
+        return steps
+    if mode in ("total", "global", "env_steps", "env-steps"):
+        return max(1, int(math.ceil(steps / envs)))
+    raise ValueError(
+        "vec_rollout_steps_mode must be 'per_env' or 'total', "
+        f"got {train_cfg.get('vec_rollout_steps_mode')!r}."
+    )
+
+
 def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]]:
     cfg = load_config(algo_cfg_path)
     algo_name = cfg.get("algo", "ippo").lower()
@@ -242,6 +270,11 @@ def main() -> None:
     num_epochs = int(train_cfg.get("num_epochs", 10))
     rollout_steps = int(train_cfg.get("rollout_steps", 1024))
     num_envs = int(train_cfg.get("num_envs", 1))
+    trainer_rollout_steps = resolve_vec_rollout_steps(
+        rollout_steps=rollout_steps,
+        num_envs=num_envs,
+        train_cfg=train_cfg,
+    )
     log_interval = int(train_cfg.get("log_interval", 1))
     eval_episodes = int(train_cfg.get("eval_episodes", 5))
     vec_env_context = str(train_cfg.get("vec_env_context") or default_vec_env_context())
@@ -343,11 +376,19 @@ def main() -> None:
     try:
         print(
             f"[train] starting trainer.run "
-            f"(num_epochs={num_epochs}, rollout_steps={rollout_steps}, num_envs={num_envs})"
+            f"(num_epochs={num_epochs}, rollout_steps={rollout_steps}, "
+            f"trainer_rollout_steps={trainer_rollout_steps}, num_envs={num_envs})"
         )
+        if num_envs > 1 and trainer_rollout_steps != rollout_steps:
+            print(
+                "[train] vec rollout_steps_mode=total: "
+                f"requested_total_env_steps={rollout_steps}, "
+                f"per_env_rollout_steps={trainer_rollout_steps}, "
+                f"actual_total_env_steps={trainer_rollout_steps * num_envs}"
+            )
         run_kw: dict[str, Any] = dict(
             num_epochs=num_epochs,
-            rollout_steps=rollout_steps,
+            rollout_steps=trainer_rollout_steps,
             seed=seed,
             log_interval=log_interval,
         )

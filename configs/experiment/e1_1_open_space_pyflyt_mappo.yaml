@@ -41,5 +41,6 @@ seed: 101
 num_envs: 8
 num_epochs: 3000
 rollout_steps: 1024
+vec_rollout_steps_mode: total
 log_interval: 1
 eval_episodes: 20
