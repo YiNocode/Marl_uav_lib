@@ -387,7 +387,12 @@ class PyFlytAviaryEnv(BaseEnv):
         self.backend.close()
 
     def _build_reference_manifold_info(self, backend_state) -> dict[str, np.ndarray]:
-        if not isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES) or self.task_state is None:
+        if (
+            not isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES)
+            or self.task_state is None
+            or not hasattr(self.task, "_reference_manifold_targets")
+            or not hasattr(self.task, "_reference_manifold_curve")
+        ):
             return {}
         lin_pos = backend_state.states[:, 3, :]
         pursuer_pos = np.asarray(lin_pos[self.task_state.pursuer_ids], dtype=np.float32)

@@ -323,6 +323,7 @@ class PursuitEvasion3v1Task(BaseTask):
         structure_gate_far_dist_ratio: float = 6.0,
         progress_gate_min_scale: float = 0.35,
         structure_obs_include_deltas: bool = True,
+        role_features_enabled: bool = True,
         role_assignment_mode: str = "nearest",
         manifold_target_phase: float = 0.0,
         manifold_target_radius_scale: float = 1.0,
@@ -341,9 +342,6 @@ class PursuitEvasion3v1Task(BaseTask):
         manifold_curve_num_samples: int = 91,
         assignment_inertia_margin: float = 0.05,
         role_progress_reward_scale: float = 0.75,
-        residual_control_gain: float = 0.5,
-        residual_control_gain_final: float | None = None,
-        residual_control_gain_decay_epochs: int | None = None,
         radial_compress_reward_scale: float = 1.0,
         radial_overshoot_penalty_scale: float = 0.5,
         contraction_reward_norm: float | None = None,
@@ -355,6 +353,10 @@ class PursuitEvasion3v1Task(BaseTask):
         encirclement_capture_radius_scale: float = 1.6,
         encirclement_capture_min_dist_scale: float = 1.5,
         encirclement_capture_radius_margin_scale: float = 0.35,
+        continuous_action_xy_ref: float = 0.25,
+        continuous_action_yaw_ref: float = 0.01,
+        continuous_action_z_ref: float = 0.15,
+        **legacy_method_kwargs: Any,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -451,6 +453,7 @@ class PursuitEvasion3v1Task(BaseTask):
         )
         self.progress_gate_min_scale = float(np.clip(progress_gate_min_scale, 0.0, 1.0))
         self.structure_obs_include_deltas = bool(structure_obs_include_deltas)
+        self.role_features_enabled = bool(role_features_enabled)
         role_mode = str(role_assignment_mode).strip().lower()
         if role_mode not in {"fixed", "nearest"}:
             raise ValueError(
@@ -490,18 +493,6 @@ class PursuitEvasion3v1Task(BaseTask):
         self.manifold_curve_num_samples = max(int(manifold_curve_num_samples), 16)
         self.assignment_inertia_margin = max(float(assignment_inertia_margin), 0.0)
         self.role_progress_reward_scale = float(role_progress_reward_scale)
-        self.residual_control_gain_start = float(residual_control_gain)
-        self.residual_control_gain_final = (
-            self.residual_control_gain_start
-            if residual_control_gain_final is None
-            else float(residual_control_gain_final)
-        )
-        self.residual_control_gain_decay_epochs = (
-            None
-            if residual_control_gain_decay_epochs is None
-            else max(int(residual_control_gain_decay_epochs), 1)
-        )
-        self.residual_control_gain = self.residual_control_gain_start
         self.radial_compress_reward_scale = float(radial_compress_reward_scale)
         self.radial_overshoot_penalty_scale = float(radial_overshoot_penalty_scale)
         self.contraction_reward_norm = (
@@ -538,30 +529,22 @@ class PursuitEvasion3v1Task(BaseTask):
             dtype=np.float32,
 
         )
-        self.role_obs_dim = 7
-        self.role_state_dim = 12
-        self.set_training_progress(epoch=0, num_epochs=1)
-
-    def _compute_residual_control_gain(self, *, epoch: int, num_epochs: int) -> float:
-        start = float(self.residual_control_gain_start)
-        end = float(self.residual_control_gain_final)
-        decay_epochs = self.residual_control_gain_decay_epochs
-        if decay_epochs is None:
-            decay_epochs = max(int(num_epochs), 1)
-        else:
-            decay_epochs = max(int(decay_epochs), 1)
-        if decay_epochs <= 1:
-            return end
-        epoch_idx = min(max(int(epoch), 0), decay_epochs - 1)
-        progress = float(epoch_idx) / float(decay_epochs - 1)
-        return float(start + (end - start) * progress)
-
-    def set_training_progress(self, *, epoch: int, num_epochs: int) -> float:
-        self.residual_control_gain = self._compute_residual_control_gain(
-            epoch=epoch,
-            num_epochs=num_epochs,
-        )
-        return float(self.residual_control_gain)
+        self.role_obs_dim = 7 if self.role_features_enabled else 0
+        self.role_state_dim = 12 if self.role_features_enabled else 0
+        self.continuous_action_xy_ref = max(float(continuous_action_xy_ref), 1e-6)
+        self.continuous_action_yaw_ref = max(float(continuous_action_yaw_ref), 1e-6)
+        self.continuous_action_z_ref = max(float(continuous_action_z_ref), 1e-6)
+        unused_method_keys = {
+            "residual_control_gain",
+            "residual_control_gain_final",
+            "residual_control_gain_decay_epochs",
+        }
+        unknown_legacy_keys = set(legacy_method_kwargs) - unused_method_keys
+        if unknown_legacy_keys:
+            raise TypeError(
+                "Unsupported PursuitEvasion3v1Task keyword(s): "
+                f"{sorted(unknown_legacy_keys)}"
+            )
 
     # ---------------------------------------------------------------------
     # reset / init
@@ -1038,6 +1021,35 @@ class PursuitEvasion3v1Task(BaseTask):
             sp[:, 3] = np.clip(sp[:, 3], -self.pursuer_speed_z, self.pursuer_speed_z)
         return sp
 
+    def _scale_continuous_pursuer_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Map policy action-space units to physical velocity setpoints.
+
+        The rollout buffer keeps the original policy actions. This scaling is
+        only for environment execution, preserving PPO/MAPPO log-prob alignment.
+        """
+        raw = np.asarray(actions, dtype=np.float32)
+        setpoints = np.zeros_like(raw, dtype=np.float32)
+        setpoints[:, 0] = (
+            np.clip(raw[:, 0] / self.continuous_action_xy_ref, -1.0, 1.0)
+            * self.pursuer_speed_xy
+        )
+        setpoints[:, 1] = (
+            np.clip(raw[:, 1] / self.continuous_action_xy_ref, -1.0, 1.0)
+            * self.pursuer_speed_xy
+        )
+        if setpoints.shape[1] >= 3:
+            setpoints[:, 2] = np.clip(
+                raw[:, 2],
+                -self.continuous_action_yaw_ref,
+                self.continuous_action_yaw_ref,
+            )
+        if setpoints.shape[1] >= 4:
+            setpoints[:, 3] = (
+                np.clip(raw[:, 3] / self.continuous_action_z_ref, -1.0, 1.0)
+                * self.pursuer_speed_z
+            )
+        return setpoints.astype(np.float32)
+
     def build_obs(self, backend_state, task_state: PursuitEvasion3v1TaskState) -> np.ndarray:
         """
         只为 pursuers 构造 obs，shape = [3, obs_dim]
@@ -1069,12 +1081,15 @@ class PursuitEvasion3v1Task(BaseTask):
         pursuer_pos = lin_pos[pursuer_ids]
         evader_pos = lin_pos[evader_id]
         evader_vel = lin_vel[evader_id]
-        manifold_targets, assignment, assigned_targets = self._assigned_targets_from_state(
-            pursuer_pos,
-            evader_pos,
-            task_state=task_state,
-        )
-        task_state.assigned_target_indices = assignment.astype(np.int64).copy()
+        assignment = np.asarray(task_state.assigned_target_indices, dtype=np.int64)
+        assigned_targets = np.zeros((len(pursuer_ids), 3), dtype=np.float32)
+        if self.role_features_enabled:
+            _, assignment, assigned_targets = self._assigned_targets_from_state(
+                pursuer_pos,
+                evader_pos,
+                task_state=task_state,
+            )
+            task_state.assigned_target_indices = assignment.astype(np.int64).copy()
 
         struct19 = self._structure_aware_features_19d(
             lin_pos, lin_vel, pursuer_ids, evader_id, task_state
@@ -1085,29 +1100,30 @@ class PursuitEvasion3v1Task(BaseTask):
             teammates = [j for j in pursuer_ids if j != i]
             j1, j2 = teammates[0], teammates[1]
 
-            obs_i = np.concatenate(
-                [
-                    self._normalize_position(lin_pos[i]),
-                    self._normalize_velocity(lin_vel[i]),
-                    self._normalize_angle(ang_pos[i]),
-                    self._normalize_delta(evader_pos - lin_pos[i]),
-                    self._normalize_velocity(evader_vel - lin_vel[i]),
-                    self._normalize_delta(lin_pos[j1] - lin_pos[i]),
-                    self._normalize_velocity(lin_vel[j1] - lin_vel[i]),
-                    self._normalize_delta(lin_pos[j2] - lin_pos[i]),
-                    self._normalize_velocity(lin_vel[j2] - lin_vel[i]),
-                    (
-                        struct19[row]
-                        if self.structure_obs_include_deltas
-                        else struct19[row, :16]
-                    ),
+            parts = [
+                self._normalize_position(lin_pos[i]),
+                self._normalize_velocity(lin_vel[i]),
+                self._normalize_angle(ang_pos[i]),
+                self._normalize_delta(evader_pos - lin_pos[i]),
+                self._normalize_velocity(evader_vel - lin_vel[i]),
+                self._normalize_delta(lin_pos[j1] - lin_pos[i]),
+                self._normalize_velocity(lin_vel[j1] - lin_vel[i]),
+                self._normalize_delta(lin_pos[j2] - lin_pos[i]),
+                self._normalize_velocity(lin_vel[j2] - lin_vel[i]),
+                (
+                    struct19[row]
+                    if self.structure_obs_include_deltas
+                    else struct19[row, :16]
+                ),
+            ]
+            if self.role_features_enabled:
+                parts.append(
                     self._role_feature_block(
                         lin_pos[i],
                         assigned_targets[row],
-                    ),
-                ],
-                axis=0,
-            ).astype(np.float32)
+                    )
+                )
+            obs_i = np.concatenate(parts, axis=0).astype(np.float32)
             obs_list.append(obs_i)
 
         return np.stack(obs_list, axis=0)
@@ -1129,28 +1145,26 @@ class PursuitEvasion3v1Task(BaseTask):
         evader_pos = self._normalize_position(evader_pos_raw).reshape(-1)
         evader_vel = self._normalize_velocity(lin_vel[evader_id]).reshape(-1)
         rels = self._normalize_delta(lin_pos[pursuer_ids] - lin_pos[evader_id][None, :]).reshape(-1)
-        _, assignment, assigned_targets_world = self._assigned_targets_from_state(
-            lin_pos[pursuer_ids],
-            evader_pos_raw,
-            task_state=task_state,
-        )
-        task_state.assigned_target_indices = assignment.astype(np.int64).copy()
-        assigned_targets = self._normalize_position(assigned_targets_world).reshape(-1)
-        assignment_feat = (assignment.astype(np.float32) / 2.0).reshape(-1)
+        parts = [
+            pursuer_pos,
+            pursuer_vel,
+            pursuer_ang,
+            evader_pos,
+            evader_vel,
+            rels,
+        ]
+        if self.role_features_enabled:
+            _, assignment, assigned_targets_world = self._assigned_targets_from_state(
+                lin_pos[pursuer_ids],
+                evader_pos_raw,
+                task_state=task_state,
+            )
+            task_state.assigned_target_indices = assignment.astype(np.int64).copy()
+            assigned_targets = self._normalize_position(assigned_targets_world).reshape(-1)
+            assignment_feat = (assignment.astype(np.float32) / 2.0).reshape(-1)
+            parts.extend([assigned_targets, assignment_feat])
 
-        state = np.concatenate(
-            [
-                pursuer_pos,
-                pursuer_vel,
-                pursuer_ang,
-                evader_pos,
-                evader_vel,
-                rels,
-                assigned_targets,
-                assignment_feat,
-            ],
-            axis=0,
-        ).astype(np.float32)
+        state = np.concatenate(parts, axis=0).astype(np.float32)
         return state
 
     def _structure_score_from_metrics(self, metrics: dict[str, Any]) -> float:
@@ -1291,19 +1305,28 @@ class PursuitEvasion3v1Task(BaseTask):
         evader_pos = lin_pos[evader_id]
 
         dists = np.linalg.norm(pursuer_pos - evader_pos[None, :], axis=1).astype(np.float32)
-        _, assignment, assigned_targets = self._assigned_targets_from_state(
-            pursuer_pos,
-            evader_pos,
-            task_state=task_state,
-        )
-        role_target_dists = np.linalg.norm(
-            assigned_targets - pursuer_pos,
-            axis=1,
-        ).astype(np.float32)
         min_dist = float(np.min(dists))
         mean_dist = float(np.mean(dists))
         mean_radius_xy = self._mean_radius_xy(pursuer_pos, evader_pos)
         p = len(pursuer_ids)
+        assignment = np.asarray(
+            getattr(task_state, "assigned_target_indices", np.arange(p, dtype=np.int64)),
+            dtype=np.int64,
+        ).reshape(-1)
+        if assignment.shape[0] != p:
+            assignment = np.arange(p, dtype=np.int64)
+        if self.role_features_enabled or float(self.role_progress_reward_scale) != 0.0:
+            _, assignment, assigned_targets = self._assigned_targets_from_state(
+                pursuer_pos,
+                evader_pos,
+                task_state=task_state,
+            )
+            role_target_dists = np.linalg.norm(
+                assigned_targets - pursuer_pos,
+                axis=1,
+            ).astype(np.float32)
+        else:
+            role_target_dists = np.zeros((p,), dtype=np.float32)
 
         prev = np.asarray(task_state.prev_pursuer_dists, dtype=np.float32).reshape(-1)
         if prev.shape[0] != p:
@@ -1322,17 +1345,20 @@ class PursuitEvasion3v1Task(BaseTask):
         mean_progress_reward_scale = float(getattr(self, "mean_progress_reward_scale", 2.0))
         min_progress_reward_scale = float(getattr(self, "min_progress_reward_scale", 2.0))
         time_penalty = float(getattr(self, "time_penalty", 0.005))
-        prev_role_target_dists = np.asarray(
-            getattr(task_state, "prev_role_target_dists", role_target_dists),
-            dtype=np.float32,
-        ).reshape(-1)
-        if prev_role_target_dists.shape[0] != p:
-            prev_role_target_dists = role_target_dists.copy()
-        role_progress = np.clip(
-            (prev_role_target_dists - role_target_dists) / progress_norm,
-            -1.0,
-            1.0,
-        ).astype(np.float32)
+        if self.role_features_enabled or float(self.role_progress_reward_scale) != 0.0:
+            prev_role_target_dists = np.asarray(
+                getattr(task_state, "prev_role_target_dists", role_target_dists),
+                dtype=np.float32,
+            ).reshape(-1)
+            if prev_role_target_dists.shape[0] != p:
+                prev_role_target_dists = role_target_dists.copy()
+            role_progress = np.clip(
+                (prev_role_target_dists - role_target_dists) / progress_norm,
+                -1.0,
+                1.0,
+            ).astype(np.float32)
+        else:
+            role_progress = np.zeros((p,), dtype=np.float32)
         prev_mean_radius_xy = float(getattr(task_state, "prev_mean_radius_xy", mean_radius_xy))
 
         structure_gate = self._structure_reward_gate(min_dist)
@@ -1534,28 +1560,12 @@ class PursuitEvasion3v1Task(BaseTask):
         已按新的有效速度尺度同步调整。
         """
         actions = np.asarray(actions)
-        lin_pos = backend_state.states[:, 3, :]
-        pursuer_pos = lin_pos[task_state.pursuer_ids]
-        evader_pos = lin_pos[task_state.evader_id]
-        _, assignment, assigned_targets = self._assigned_targets_from_state(
-            pursuer_pos,
-            evader_pos,
-            task_state=task_state,
-        )
-        task_state.assigned_target_indices = assignment.astype(np.int64).copy()
-        residual = np.zeros((3, 4), dtype=np.float32)
-        pos_error = np.float32(self.residual_control_gain) * (
-            assigned_targets - pursuer_pos
-        ).astype(np.float32)
-        residual[:, 0] = pos_error[:, 0]
-        residual[:, 1] = pos_error[:, 1]
-        residual[:, 3] = pos_error[:, 2]
 
         if action_space_type == "continuous" and actions.ndim == 2 and actions.dtype in (np.float32, np.float64):
             assert actions.shape[0] == 3 and actions.shape[1] == (action_dim or 4), (
                 f"Expected continuous actions [3, {action_dim or 4}], got {actions.shape}"
             )
-            pursuer_setpoints = actions.astype(np.float32) + residual
+            pursuer_setpoints = self._scale_continuous_pursuer_actions(actions)
             pursuer_setpoints = self._clip_pursuer_setpoints(pursuer_setpoints)
             evader_setpoint = self._compute_evader_setpoint(backend_state, task_state)[None, :]
             # if self.debug:
@@ -1565,7 +1575,7 @@ class PursuitEvasion3v1Task(BaseTask):
 
         actions = np.asarray(actions, dtype=np.int64)
         assert actions.shape[0] == 3, f"Expected 3 pursuer actions, got {actions.shape}"
-        pursuer_setpoints = self._action_table[actions] + residual
+        pursuer_setpoints = self._action_table[actions]
         pursuer_setpoints = self._clip_pursuer_setpoints(pursuer_setpoints)
         evader_setpoint = self._compute_evader_setpoint(backend_state, task_state)[None, :]
         joint_setpoints = np.concatenate([pursuer_setpoints, evader_setpoint], axis=0).astype(np.float32)

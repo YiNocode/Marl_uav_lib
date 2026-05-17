@@ -30,6 +30,10 @@ if str(ROOT) not in sys.path:
 
 from marl_uav.agents.mac import MAC
 from marl_uav.control.fixed_ring_pursuit import make_fixed_ring_get_actions_fn
+from marl_uav.control.geometric_pursuit_baselines import (
+    make_oracle_slot_get_actions_fn,
+    make_pure_pursuit_get_actions_fn,
+)
 from marl_uav.envs.factories import build_env_from_config
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.utils.checkpoint import load_checkpoint
@@ -279,13 +283,23 @@ def _build_rl_worker(cfg_path: Path, seed: int) -> RolloutWorker:
     return RolloutWorker(env=env, policy=mac)
 
 
-def _build_fixed_ring_worker(cfg_path: Path, seed: int) -> RolloutWorker:
+def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
     cfg = load_config(cfg_path)
     env = build_env_from_config(ROOT / str(cfg["env"]), seed=seed, task_cfg=cfg.get("task", {}))
     if getattr(env, "obs_dim", None) is None or getattr(env, "state_dim", None) is None:
         env.reset(seed=seed)
-    ring_cfg = dict(cfg.get("fixed_ring", {}) or {})
-    get_actions = make_fixed_ring_get_actions_fn(env, **ring_cfg)
+
+    if "fixed_ring" in cfg:
+        get_actions = make_fixed_ring_get_actions_fn(env, **dict(cfg.get("fixed_ring", {}) or {}))
+    elif "pure_pursuit" in cfg:
+        get_actions = make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
+    elif "oracle_slot" in cfg:
+        get_actions = make_oracle_slot_get_actions_fn(env, **dict(cfg.get("oracle_slot", {}) or {}))
+    else:
+        raise ValueError(
+            f"Heuristic config {cfg_path.relative_to(ROOT)} must define one of "
+            "fixed_ring, pure_pursuit, or oracle_slot."
+        )
     return RolloutWorker(env=env, policy=object(), get_actions_fn=get_actions)
 
 
@@ -413,7 +427,7 @@ def run_evaluation(
                         continue
                     raise
             elif method_kind == "heuristic":
-                worker = _build_fixed_ring_worker(base_cfg_path, seed=base_seed + seed)
+                worker = _build_heuristic_worker(base_cfg_path, seed=base_seed + seed)
             else:
                 raise ValueError(f"Unsupported method kind={method_kind!r} for {method}")
 
@@ -481,10 +495,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         choices=("generate-configs", "train", "eval", "all"),
-        default="generate-configs",
+        default="eval",
     )
-    p.add_argument("--methods", nargs="*", default=None)
-    p.add_argument("--episodes", type=int, default=None)
+    p.add_argument("--methods", nargs="*", default=["mappo"])
+    p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--overwrite-configs", action="store_true")
     p.add_argument("--skip-existing-checkpoints", action="store_true")
     p.add_argument("--allow-missing-checkpoints", action="store_true")
@@ -519,4 +533,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

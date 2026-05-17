@@ -146,6 +146,9 @@ class PursuitEvasion3v1Task(BaseTask):
         progress_dist_norm: float = 2.0,
         capture_bonus_team: float = 30.0,
         capture_bonus_individual: float = 10.0,
+        continuous_action_xy_ref: float = 0.25,
+        continuous_action_yaw_ref: float = 0.01,
+        continuous_action_z_ref: float = 0.15,
     ) -> None:
         self.world_xy = float(world_xy)
         self.z_min = float(z_min)
@@ -225,6 +228,9 @@ class PursuitEvasion3v1Task(BaseTask):
         self.progress_dist_norm = float(progress_dist_norm)
         self.capture_bonus_team = float(capture_bonus_team)
         self.capture_bonus_individual = float(capture_bonus_individual)
+        self.continuous_action_xy_ref = max(float(continuous_action_xy_ref), 1e-6)
+        self.continuous_action_yaw_ref = max(float(continuous_action_yaw_ref), 1e-6)
+        self.continuous_action_z_ref = max(float(continuous_action_z_ref), 1e-6)
         # 离散动作：[vx, vy, yaw, vz]
         self._action_table = np.array(
             [
@@ -571,6 +577,28 @@ class PursuitEvasion3v1Task(BaseTask):
     # ---------------------------------------------------------------------
     # action mapping
     # ---------------------------------------------------------------------
+    def _scale_continuous_pursuer_actions(self, actions: np.ndarray) -> np.ndarray:
+        raw = np.asarray(actions, dtype=np.float32)
+        scaled = np.zeros_like(raw, dtype=np.float32)
+        scaled[:, 0] = (
+            np.clip(raw[:, 0] / self.continuous_action_xy_ref, -1.0, 1.0)
+            * self.pursuer_speed_xy
+        )
+        scaled[:, 1] = (
+            np.clip(raw[:, 1] / self.continuous_action_xy_ref, -1.0, 1.0)
+            * self.pursuer_speed_xy
+        )
+        scaled[:, 2] = np.clip(
+            raw[:, 2],
+            -self.continuous_action_yaw_ref,
+            self.continuous_action_yaw_ref,
+        )
+        scaled[:, 3] = (
+            np.clip(raw[:, 3] / self.continuous_action_z_ref, -1.0, 1.0)
+            * self.pursuer_speed_z
+        )
+        return scaled
+
     def action_to_setpoint(
         self,
         actions: np.ndarray,
@@ -594,7 +622,7 @@ class PursuitEvasion3v1Task(BaseTask):
             assert actions.shape[0] == 3 and actions.shape[1] == (action_dim or 4), (
                 f"Expected continuous actions [3, {action_dim or 4}], got {actions.shape}"
             )
-            pursuer_setpoints = actions.astype(np.float32)
+            pursuer_setpoints = self._scale_continuous_pursuer_actions(actions)
             evader_setpoint = self._compute_evader_setpoint(backend_state, task_state)[None, :]
             # if self.debug:
             #     print("evader_setpoint=", evader_setpoint)

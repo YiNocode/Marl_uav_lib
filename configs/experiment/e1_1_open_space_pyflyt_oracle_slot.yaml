@@ -1,14 +1,14 @@
 # E1.1 main benchmark, open-space / obstacle-free, PyFlyt.
-# Method: fixed-ring encirclement heuristic baseline.
+# Method: oracle slot geometric controller.
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
-  method: fixed_ring
-  description: Non-learning fixed-ring encirclement controller.
+  method: oracle_slot
+  description: Non-learning controller that moves directly toward the full-method slot targets.
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
-train_results_dir: results/e1_1_open_space_pyflyt/training/fixed_ring
+train_results_dir: results/e1_1_open_space_pyflyt/training/oracle_slot
 
 task:
   name: pursuit_evasion_3v1_ex1
@@ -39,13 +39,22 @@ task:
   radial_compress_reward_scale: 0.0
   radial_overshoot_penalty_scale: 0.0
   encirclement_capture_enabled: true
+  encirclement_capture_hold_steps: 8
+  encirclement_capture_max_gap_deg: 135.0
+  encirclement_capture_radius_scale: 1.6
+  encirclement_capture_min_dist_scale: 1.5
+  encirclement_capture_radius_margin_scale: 0.35
 
-fixed_ring:
-  ring_radius: 1.6
-  approach_gain: 0.25
+  role_assignment_mode: nearest
+  manifold_target_phase: 0.0
+  manifold_target_radius_scale: 1.0
+  manifold_contraction_rate: 0.01
+  manifold_structure_gate_scale: 0.75
+  assignment_inertia_margin: 0.05
+
+oracle_slot:
+  xy_gain: 0.25
   z_gain: 0.20
-  phase: 0.0
-  assignment: fixed
 
 seed: 101
 eval_episodes: 200

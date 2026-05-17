@@ -2,8 +2,7 @@
   suite: E1
   scenario: e1_1_open_space
   method: dream_mappo_full
-  description: DREAM-MAPPO with structure rewards, manifold residual control, and
-    encirclement capture.
+  description: 'DREAM-MAPPO full method: MAPPO learner plus deformable manifold policy head, ex1 role assignment, and structure rewards.'
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/dream_mappo.yaml
 model: configs/model/dream_mappo_centralized.yaml
@@ -16,7 +15,7 @@ task:
   capture_dist: 1.0
   episode_limit: 1000
   pursuer_speed: 0.15
-  evader_speed: 0.1
+  evader_speed: 0.20
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -29,6 +28,14 @@ task:
   capture_bonus_team: 30.0
   capture_bonus_individual: 10.0
   progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.01
+  continuous_action_z_ref: 0.15
+  role_features_enabled: true
+  role_assignment_mode: nearest
+  manifold_target_phase: 0.0
+  manifold_target_radius_scale: 1.0
+  assignment_inertia_margin: 0.05
   structure_reward_scale: 0.25
   structure_improve_scale: 0.2
   structure_hold_reward_scale: 0.05
@@ -37,7 +44,6 @@ task:
   radial_overshoot_penalty_scale: 0.5
   contraction_phase_structure_scale: 0.3
   contraction_phase_compress_scale: 2.0
-  residual_control_gain: 0.5
   encirclement_capture_enabled: true
   encirclement_capture_hold_steps: 8
   encirclement_capture_max_gap_deg: 135.0
@@ -55,8 +61,8 @@ task:
   manifold_structure_gate_scale: 0.75
 seed: 102
 num_envs: 8
-num_epochs: 1000
-rollout_steps: 1024
+num_epochs: 10000
+rollout_steps: 2048
 log_interval: 1
 eval_episodes: 20
 

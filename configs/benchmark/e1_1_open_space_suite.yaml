@@ -25,8 +25,15 @@ methods:
     kind: heuristic
     config: configs/experiment/e1_1_open_space_pyflyt_fixed_ring.yaml
     train: false
+  pure_pursuit:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_pure_pursuit.yaml
+    train: false
+  oracle_slot:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_oracle_slot.yaml
+    train: false
   dream_mappo_full:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml
     train: true
-

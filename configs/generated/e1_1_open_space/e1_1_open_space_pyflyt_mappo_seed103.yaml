@@ -2,20 +2,20 @@
   suite: E1
   scenario: e1_1_open_space
   method: mappo
-  description: Plain MAPPO, no structure reward and no manifold residual controller.
+  description: Pure MAPPO on the base pursuit task; no structure observation, no structure reward shaping, no DREAM manifold policy.
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml
 model: configs/model/centralized_critic.yaml
 train_results_dir: results/e1_1_open_space_pyflyt/training/mappo
 task:
-  name: pursuit_evasion_3v1_ex1
+  name: pursuit_evasion_3v1
   world_xy: 20.0
   z_min: 0.5
   z_max: 5.0
   capture_dist: 1.0
   episode_limit: 1000
   pursuer_speed: 0.15
-  evader_speed: 0.1
+  evader_speed: 0.20
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -28,25 +28,13 @@ task:
   capture_bonus_team: 30.0
   capture_bonus_individual: 10.0
   progress_dist_norm: 2.0
-  structure_reward_scale: 0.0
-  structure_improve_scale: 0.0
-  structure_hold_reward_scale: 0.0
-  role_progress_reward_scale: 0.0
-  radial_compress_reward_scale: 0.0
-  radial_overshoot_penalty_scale: 0.0
-  residual_control_gain: 0.0
-  encirclement_capture_enabled: false
-  structure_cov_weight: 1.0
-  structure_col_weight: 1.2
-  structure_ang_weight: 1.0
-  structure_cov_threshold: 0.75
-  structure_col_threshold: 0.35
-  structure_ang_threshold: 0.75
-  structure_hold_steps_cap: 30
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.01
+  continuous_action_z_ref: 0.15
 seed: 103
 num_envs: 8
-num_epochs: 1000
-rollout_steps: 1024
+num_epochs: 10000
+rollout_steps: 2048
 log_interval: 1
 eval_episodes: 20
 
