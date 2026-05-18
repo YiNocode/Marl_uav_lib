@@ -38,7 +38,7 @@ task:
   continuous_action_z_ref: 0.15
 
 seed: 101
-num_envs: 8
+num_envs: 1
 num_epochs: 3000
 rollout_steps: 1024
 vec_rollout_steps_mode: total

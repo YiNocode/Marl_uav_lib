@@ -345,7 +345,8 @@ def main() -> None:
         log_interval=log_interval,
     )
 
-    evaluator = Evaluator(rollout_worker)
+    eval_worker = RolloutWorker(env=env, policy=mac, logger=None)
+    evaluator = Evaluator(eval_worker)
     eval_metrics, _ = evaluator.run(num_episodes=eval_episodes, seed=seed + 10_000)
 
     # 结束前刷新并关闭 TensorBoard Logger

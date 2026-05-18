@@ -401,8 +401,8 @@ def main() -> None:
 
     if use_genesis_native_vec:
         env = build_env(env_cfg_path, seed=seed + 10_000, task_cfg=task_cfg)
-        rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
-    evaluator = Evaluator(rollout_worker)
+    eval_worker = RolloutWorker(env=env, policy=mac, logger=None)
+    evaluator = Evaluator(eval_worker)
     eval_metrics, _ = evaluator.run(num_episodes=eval_episodes, seed=seed + 10_000)
 
     tb_logger.flush()

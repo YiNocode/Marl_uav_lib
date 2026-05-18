@@ -70,6 +70,10 @@ def _task(cfg: dict) -> dict:
     return task
 
 
+def _model(cfg: dict) -> dict:
+    return _load(cfg["model"])
+
+
 def _assert_no_residual_controller(task: dict) -> None:
     assert not (set(task) & RESIDUAL_CONTROL_KEYS)
 
@@ -81,6 +85,7 @@ def test_e1_1_mappo_is_pure_mappo() -> None:
         assert cfg["benchmark"]["method"] == "mappo"
         assert cfg["algo"] == "configs/algo/mappo.yaml"
         assert cfg["model"] == "configs/model/centralized_critic.yaml"
+        assert _model(cfg).get("type") == "centralized_critic"
         assert task["name"] == "pursuit_evasion_3v1"
         assert not (set(task) & STRUCTURE_METHOD_KEYS)
         _assert_no_residual_controller(task)
@@ -93,6 +98,7 @@ def test_e1_1_reward_shaped_mappo_has_structure_inputs_and_rewards_only() -> Non
         assert cfg["benchmark"]["method"] == "reward_shaped_mappo"
         assert cfg["algo"] == "configs/algo/mappo.yaml"
         assert cfg["model"] == "configs/model/centralized_critic.yaml"
+        assert _model(cfg).get("type") == "centralized_critic"
         assert task["name"] == "pursuit_evasion_3v1_ex1"
         assert bool(task["role_features_enabled"]) is False
         assert float(task["structure_reward_scale"]) > 0.0
@@ -109,6 +115,11 @@ def test_e1_1_dream_mappo_full_has_manifold_policy_and_role_assignment() -> None
         assert cfg["benchmark"]["method"] == "dream_mappo_full"
         assert cfg["algo"] == "configs/algo/dream_mappo.yaml"
         assert cfg["model"] == "configs/model/dream_mappo_centralized.yaml"
+        model = _model(cfg)
+        dream_cfg = model.get("dream", {})
+        assert model.get("type") == "dream_mappo_centralized_critic"
+        assert float(dream_cfg["a_max_geom"]) > 0.0
+        assert float(dream_cfg["a_max_residual"]) > 0.0
         assert task["name"] == "pursuit_evasion_3v1_ex1"
         assert bool(task["role_features_enabled"]) is True
         assert task["role_assignment_mode"] == "nearest"
