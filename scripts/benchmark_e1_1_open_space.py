@@ -118,6 +118,46 @@ def checkpoint_path_for_config(cfg_path: Path) -> Path:
     return result_dir / "checkpoints" / str(seed) / "best.pt"
 
 
+def _bc_checkpoint_path_for_config(cfg_path: Path) -> Path:
+    cfg = load_config(cfg_path)
+    bc_cfg = dict(cfg.get("bc_warmstart") or {})
+    if not bc_cfg:
+        return Path()
+    seed = int(cfg.get("seed", 0))
+    ckpt_name = str(bc_cfg.get("checkpoint_name", "bc_pretrained.pt"))
+    result_dir = Path(str(cfg.get("train_results_dir") or f"results/{cfg_path.stem}"))
+    if not result_dir.is_absolute():
+        result_dir = ROOT / result_dir
+    return result_dir / "checkpoints" / str(seed) / ckpt_name
+
+
+def run_bc_pretrain(
+    suite: dict[str, Any],
+    methods: list[str],
+    *,
+    skip_existing: bool,
+    overwrite_configs: bool,
+) -> None:
+    """Run behavior-cloning warm-start only (scripts/train.py --bc-only)."""
+    cfg_paths = generate_train_configs(suite, methods, overwrite=overwrite_configs)
+    for cfg_path in cfg_paths:
+        cfg = load_config(cfg_path)
+        if not bool((cfg.get("bc_warmstart") or {}).get("enabled", False)):
+            print(f"[pretrain] skip (bc_warmstart.enabled=false): {cfg_path.relative_to(ROOT)}")
+            continue
+        bc_ckpt = _bc_checkpoint_path_for_config(cfg_path)
+        if skip_existing and bc_ckpt.is_file():
+            print(f"[pretrain] skip existing BC checkpoint: {bc_ckpt}")
+            continue
+        rel = cfg_path.relative_to(ROOT)
+        print(f"[pretrain] {rel}")
+        subprocess.run(
+            [sys.executable, "scripts/train.py", "--train-config", str(rel), "--bc-only"],
+            cwd=ROOT,
+            check=True,
+        )
+
+
 def run_training(
     suite: dict[str, Any],
     methods: list[str],
@@ -494,7 +534,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--mode",
-        choices=("generate-configs", "train", "eval", "all"),
+        choices=("generate-configs", "pretrain", "train", "eval", "all"),
         default="eval",
     )
     p.add_argument("--methods", nargs="*", default=["mappo"])
@@ -510,9 +550,17 @@ def main() -> None:
     suite = load_suite(ROOT / args.suite_config)
     methods = selected_methods(suite, args.methods)
 
-    if args.mode in ("generate-configs", "train", "all"):
+    if args.mode in ("generate-configs", "pretrain", "train", "all"):
         paths = generate_train_configs(suite, methods, overwrite=bool(args.overwrite_configs))
         print(f"[generate] {len(paths)} generated/available train configs")
+
+    if args.mode in ("pretrain", "all"):
+        run_bc_pretrain(
+            suite,
+            methods,
+            skip_existing=bool(args.skip_existing_checkpoints),
+            overwrite_configs=bool(args.overwrite_configs),
+        )
 
     if args.mode in ("train", "all"):
         run_training(

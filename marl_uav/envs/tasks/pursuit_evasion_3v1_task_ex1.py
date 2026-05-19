@@ -594,8 +594,9 @@ class PursuitEvasion3v1Task(BaseTask):
 
         if self.debug:
             print(
-                "[reset] world_xy=", self.world_xy,
-                "scene_scale=", self.scene_scale,
+                "ex1ex1ex1ex1ex1ex1ex1ex1ex1"
+                # "[reset] world_xy=", self.world_xy,
+                # "scene_scale=", self.scene_scale,
                 "episode_limit=", self.episode_limit,
                 "capture_dist=", self.capture_dist,
                 "init_dists=", init_dists,
@@ -1335,7 +1336,7 @@ class PursuitEvasion3v1Task(BaseTask):
         prev_mean_dist = float(np.mean(prev))
 
         # 关键：不要再用 world_xy 做归一化
-        progress_norm = float(getattr(self, "progress_dist_norm", 2.0))
+        progress_norm = max(float(getattr(self, "progress_dist_norm", 2.0)), 1e-6)
 
         per_progress = np.clip((prev - dists) / progress_norm, -1.0, 1.0).astype(np.float32)
         mean_progress = np.clip((prev_mean_dist - mean_dist) / progress_norm, -1.0, 1.0)
@@ -1498,6 +1499,8 @@ class PursuitEvasion3v1Task(BaseTask):
                 "radial_gap=", radial_gap,
                 "encirclement_capture=", encirclement_capture,
                 "rewards=", rewards,
+                "pursuer_pos=", pursuer_pos[pursuer_ids],
+                "evader_pos=", evader_pos,
             )
 
         task_state.prev_pursuer_dists = dists.copy()

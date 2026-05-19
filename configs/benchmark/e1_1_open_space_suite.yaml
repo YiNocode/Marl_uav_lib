@@ -17,6 +17,10 @@ methods:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo.yaml
     train: true
+  mappo_bc:
+    kind: rl
+    config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc.yaml
+    train: true
   reward_shaped_mappo:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_reward_shaped_mappo.yaml

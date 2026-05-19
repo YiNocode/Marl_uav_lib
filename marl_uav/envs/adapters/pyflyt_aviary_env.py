@@ -263,7 +263,9 @@ class PyFlytAviaryEnv(BaseEnv):
             p_oob_mask = self.task._get_oob_mask(pursuer_pos)
             num_p_oob = int(np.sum(p_oob_mask))
             pursuer_oob = bool(num_p_oob >= 1)
-            too_many_pursuers_oob = bool(num_p_oob >= 2)
+            too_many_pursuers_oob = bool(
+                num_p_oob >= int(getattr(self.task, "max_pursuers_oob_before_terminate", 1))
+            )
             evader_oob = bool(self.task._get_oob_mask(evader_pos[None, :])[0])
 
             # timeout: 由于时间上限导致的截断（既不是捕获，也不是出界终止）

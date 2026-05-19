@@ -19,6 +19,7 @@ from marl_uav.learners.on_policy import IPPOLearner, MAPPOLearner, SCMAPPOLearne
 from marl_uav.policies.actor_critic_policy import ActorCriticPolicy
 from marl_uav.policies.centralized_critic_policy import CentralizedCriticPolicy
 from marl_uav.policies.dream_mappo_policy import DreamMappoCentralizedCriticPolicy
+from marl_uav.runners.bc_pretrainer import load_bc_policy_weights, run_bc_warmstart
 from marl_uav.runners.evaluator import Evaluator
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
@@ -43,6 +44,16 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=str(Path("configs") / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"),
         help="Top-level training config path.",
+    )
+    p.add_argument(
+        "--bc-only",
+        action="store_true",
+        help="Run behavior-cloning warm-start only (no MAPPO/PPO training).",
+    )
+    p.add_argument(
+        "--skip-bc",
+        action="store_true",
+        help="Skip BC warm-start even if bc_warmstart.enabled is true in the config.",
     )
     return p.parse_args()
 
@@ -321,6 +332,33 @@ def main() -> None:
     learner, trainer_kwargs = build_learner(algo_cfg_path, policy=policy_core)
     ckpt_dir = results_dir / "checkpoints" / str(seed)
     ckpt_mgr = CheckpointManager(ckpt_dir, best_metric="train/avg_return", mode="max")
+
+    bc_cfg = dict(train_cfg.get("bc_warmstart") or {})
+    bc_enabled = bool(bc_cfg.get("enabled", False)) and not bool(args.skip_bc)
+    bc_ckpt_path = None
+    if bc_enabled:
+        bc_ckpt_path = run_bc_warmstart(
+            env=env,
+            policy=policy_core,
+            train_cfg=train_cfg,
+            results_dir=results_dir,
+            seed=seed,
+            logger=tb_logger,
+            env_cfg_path=env_cfg_path,
+            build_env_fn=build_env,
+        )
+        if bc_ckpt_path is not None and bool(bc_cfg.get("load_for_mappo", True)):
+            load_bc_policy_weights(policy_core, bc_ckpt_path)
+            print(f"[train] loaded BC warm-start weights from {bc_ckpt_path}")
+
+    if args.bc_only:
+        tb_logger.flush()
+        tb_logger.close()
+        if bc_ckpt_path is None:
+            print("[bc-only] nothing to do (bc_warmstart.enabled is false or run was skipped).")
+        else:
+            print(f"[bc-only] finished. checkpoint={bc_ckpt_path}")
+        return
 
     rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
     vec_env_manager = None

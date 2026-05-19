@@ -491,7 +491,7 @@ class PursuitEvasion3v1Task(BaseTask):
         prev_mean_dist = float(np.mean(prev))
 
         # 关键：不要再用 world_xy 做归一化
-        progress_norm = float(getattr(self, "progress_dist_norm", 2.0))
+        progress_norm = max(float(getattr(self, "progress_dist_norm", 2.0)), 1e-6)
 
         per_progress = np.clip((prev - dists) / progress_norm, -1.0, 1.0).astype(np.float32)
         mean_progress = np.clip((prev_mean_dist - mean_dist) / progress_norm, -1.0, 1.0)
