@@ -11,6 +11,10 @@ from marl_uav.data.batch import Batch, EpisodeBatch
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
 from marl_uav.runners.rollout_worker import RolloutWorker
+from marl_uav.utils.mappo_finetune import (
+    deterministic_rollout_for_epoch,
+    entropy_coef_for_epoch,
+)
 from marl_uav.utils.rl import compute_gae, compute_returns
 
 if TYPE_CHECKING:
@@ -138,6 +142,8 @@ class Trainer(BaseRunner):
         rollout_steps: int = 1024,
         seed: int = 42,
         log_interval: int = 1,
+        finetune_cfg: dict[str, Any] | None = None,
+        default_entropy_coef: float | None = None,
     ) -> Dict[str, Any]:
         """主训练循环。
 
@@ -153,8 +159,23 @@ class Trainer(BaseRunner):
 
         env_step_seed = seed
         total_env_steps = 0
+        finetune = dict(finetune_cfg or {})
+        base_entropy = (
+            float(default_entropy_coef)
+            if default_entropy_coef is not None
+            else float(getattr(self.learner, "entropy_coef", 0.0))
+        )
+        policy = getattr(self.rollout_worker, "policy", None)
+        mac_policy = policy
 
         for epoch in range(num_epochs):
+            if mac_policy is not None and hasattr(mac_policy, "set_test_mode"):
+                mac_policy.set_test_mode(deterministic_rollout_for_epoch(finetune, epoch))
+            if hasattr(self.learner, "entropy_coef"):
+                self.learner.entropy_coef = entropy_coef_for_epoch(
+                    self.learner, finetune, epoch, base_entropy
+                )
+
             steps_collected = 0
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []

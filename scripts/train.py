@@ -19,7 +19,12 @@ from marl_uav.learners.on_policy import IPPOLearner, MAPPOLearner, SCMAPPOLearne
 from marl_uav.policies.actor_critic_policy import ActorCriticPolicy
 from marl_uav.policies.centralized_critic_policy import CentralizedCriticPolicy
 from marl_uav.policies.dream_mappo_policy import DreamMappoCentralizedCriticPolicy
-from marl_uav.runners.bc_pretrainer import load_bc_policy_weights, run_bc_warmstart
+from marl_uav.runners.bc_pretrainer import (
+    load_bc_policy_weights,
+    run_bc_warmstart,
+    set_policy_log_std,
+)
+from marl_uav.utils.mappo_finetune import resolve_mappo_finetune_cfg
 from marl_uav.runners.evaluator import Evaluator
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
@@ -349,7 +354,13 @@ def main() -> None:
         )
         if bc_ckpt_path is not None and bool(bc_cfg.get("load_for_mappo", True)):
             load_bc_policy_weights(policy_core, bc_ckpt_path)
+            log_std_after = bc_cfg.get("log_std_after_bc")
+            if log_std_after is not None:
+                set_policy_log_std(policy_core, float(log_std_after))
             print(f"[train] loaded BC warm-start weights from {bc_ckpt_path}")
+
+    finetune_cfg = resolve_mappo_finetune_cfg(train_cfg)
+    default_entropy_coef = float(getattr(learner, "entropy_coef", 0.0))
 
     if args.bc_only:
         tb_logger.flush()
@@ -429,7 +440,15 @@ def main() -> None:
             rollout_steps=trainer_rollout_steps,
             seed=seed,
             log_interval=log_interval,
+            finetune_cfg=finetune_cfg,
+            default_entropy_coef=default_entropy_coef,
         )
+        if finetune_cfg:
+            print(
+                "[train] mappo_finetune: "
+                f"deterministic_rollout_epochs={int(finetune_cfg.get('deterministic_rollout_epochs', 0))} "
+                f"entropy_coef_start={finetune_cfg.get('entropy_coef_start')}"
+            )
         if num_envs > 1:
             run_kw["profile_timing"] = profile_timing
         train_metrics = trainer.run(**run_kw)

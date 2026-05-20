@@ -1,23 +1,24 @@
-# E1.1 open-space: fixed_ring BC warm-start + MAPPO fine-tune.
+# E1.1 open-space: oracle-slot BC warm-start + MAPPO fine-tune.
 #
-# Training (via benchmark):
+# Use oracle_slot (not fixed_ring) so expert targets match ex1 role/slot obs.
+#
+# Training:
 #   python scripts/benchmark_e1_1_open_space.py --mode train --methods mappo_bc --overwrite-configs
 #
-# BC only:
+# Re-run BC only (delete checkpoints/.../bc_pretrained.pt first):
 #   python scripts/benchmark_e1_1_open_space.py --mode pretrain --methods mappo_bc --overwrite-configs
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: mappo_bc
-  description: MAPPO with fixed-ring behavior cloning warm-start, then on-policy fine-tuning.
+  description: MAPPO with oracle-slot BC warm-start and protected fine-tuning.
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml
 model: configs/model/centralized_critic.yaml
 train_results_dir: results/e1_1_open_space_pyflyt/training/mappo_bc
 
-# Match fixed_ring / pure_pursuit heuristic task (ex1 + encirclement capture).
 task:
   name: pursuit_evasion_3v1_ex1
   world_xy: 20.0
@@ -48,27 +49,36 @@ task:
   radial_compress_reward_scale: 0.0
   radial_overshoot_penalty_scale: 0.0
   encirclement_capture_enabled: true
+  role_features_enabled: true
   debug: false
 
 bc_warmstart:
   enabled: true
-  expert: fixed_ring
-  fixed_ring:
-    ring_radius: 1.6
-    approach_gain: 0.25
+  # Must match ex1 slot assignment in observations (fixed_ring does not).
+  expert: oracle_slot
+  oracle_slot:
+    xy_gain: 0.25
     z_gain: 0.20
-    phase: 0.0
-    assignment: fixed
-  num_epochs: 80
-  episodes_per_epoch: 40
+  num_epochs: 15
+  episodes_per_epoch: 48
   batch_size: 512
-  lr: 0.0003
+  lr: 0.0005
   max_grad_norm: 0.5
-  mse_coef: 0.1
-  log_interval: 1
+  mse_coef: 0.25
+  log_interval: 5
   checkpoint_name: bc_pretrained.pt
-  skip_if_exists: true
+  skip_if_exists: True
   load_for_mappo: true
+  log_std_after_bc: -2.0
+  eval_episodes: 20
+  min_eval_capture_rate: 0.25
+
+mappo_finetune:
+  # Keep BC mean action during early MAPPO (no Gaussian noise).
+  deterministic_rollout_epochs: 800
+  entropy_coef_start: 0.0
+  entropy_coef_end: 0.001
+  entropy_coef_ramp_epochs: 1500
 
 seed: 101
 num_envs: 1

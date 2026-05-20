@@ -13,6 +13,101 @@ from marl_uav.learners.bc.bc_learner import BCLearner
 from marl_uav.utils.logger import Logger
 
 
+def _tensor_to_numpy(x: Any) -> np.ndarray:
+    if hasattr(x, "detach") and hasattr(x, "cpu"):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def set_policy_log_std(policy: Any, log_std: float) -> None:
+    """Clamp Gaussian policy exploration after BC (policy_head.log_std)."""
+    head = getattr(policy, "policy_head", None) or getattr(policy, "actor_head", None)
+    if head is None or not hasattr(head, "log_std"):
+        return
+    import torch
+
+    with torch.no_grad():
+        head.log_std.fill_(float(log_std))
+
+
+def evaluate_bc_clone(
+    env: Any,
+    policy: Any,
+    expert_get_actions,
+    *,
+    num_episodes: int = 20,
+    seed: int = 0,
+    deterministic: bool = True,
+) -> dict[str, float]:
+    """Evaluate cloned policy vs expert on the same env dynamics."""
+    import torch
+
+    policy.eval()
+    capture_cnt = 0
+    oob_cnt = 0
+    returns: list[float] = []
+    lens: list[int] = []
+    action_mse: list[float] = []
+
+    for ep in range(int(num_episodes)):
+        ep_seed = int(seed) + ep
+        try:
+            env.reset(seed=ep_seed)
+        except TypeError:
+            env.reset()
+
+        ep_ret = 0.0
+        steps = 0
+        any_oob = False
+        captured = False
+        while True:
+            obs = np.asarray(env.get_obs(), dtype=np.float32)
+            state = np.asarray(env.get_state(), dtype=np.float32)
+            avail = env.get_avail_actions()
+            expert_actions = np.asarray(
+                expert_get_actions(obs, state, avail),
+                dtype=np.float32,
+            ).reshape(env.num_agents, -1)
+
+            obs_batch = obs[np.newaxis, ...]
+            state_batch = state[np.newaxis, ...] if state.ndim == 1 else state
+            with torch.no_grad():
+                actor_out, _ = policy.forward(  # type: ignore[attr-defined]
+                    obs_batch,
+                    state_batch,
+                    deterministic=deterministic,
+                )
+            policy_actions = _tensor_to_numpy(actor_out["actions"][0]).astype(np.float32)
+            action_mse.append(float(np.mean((policy_actions - expert_actions) ** 2)))
+
+            _transition, rewards, terminated, truncated, info = env.step(policy_actions)
+            ep_ret += float(sum(rewards))
+            steps += 1
+            if info.get("pursuer_oob", False):
+                any_oob = True
+            if bool(info.get("capture", False) or info.get("captured", False)):
+                captured = True
+            if bool(terminated) or bool(truncated):
+                break
+
+        if captured:
+            capture_cnt += 1
+        if any_oob:
+            oob_cnt += 1
+        returns.append(ep_ret)
+        lens.append(steps)
+
+    policy.train()
+    n = max(int(num_episodes), 1)
+    return {
+        "bc_eval/capture_rate": float(capture_cnt / n),
+        "bc_eval/pursuer_oob_episode_rate": float(oob_cnt / n),
+        "bc_eval/mean_episode_return": float(np.mean(returns)) if returns else 0.0,
+        "bc_eval/mean_episode_len": float(np.mean(lens)) if lens else 0.0,
+        "bc_eval/mean_action_mse": float(np.mean(action_mse)) if action_mse else 0.0,
+    }
+
+
 def _resolve_bc_task_cfg(train_cfg: dict[str, Any]) -> dict[str, Any] | None:
     bc_cfg = dict(train_cfg.get("bc_warmstart") or {})
     if bc_cfg.get("task"):
@@ -88,8 +183,31 @@ def run_bc_warmstart(
     ckpt_path = results_dir / "checkpoints" / str(seed) / ckpt_name
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if bool(bc_cfg.get("skip_if_exists", True)) and ckpt_path.is_file():
+    skipped_training = bool(bc_cfg.get("skip_if_exists", True)) and ckpt_path.is_file()
+    if skipped_training:
         print(f"[bc] skip existing checkpoint: {ckpt_path}")
+        load_bc_policy_weights(policy, ckpt_path)
+        expert_name = str(bc_cfg.get("expert", "fixed_ring"))
+        expert_params = dict(bc_cfg.get(expert_name) or bc_cfg.get("expert_params") or {})
+        expert_get_actions = make_expert_get_actions_fn(env, expert_name, expert_params)
+        eval_metrics = evaluate_bc_clone(
+            env,
+            policy,
+            expert_get_actions,
+            num_episodes=int(bc_cfg.get("eval_episodes", 10)),
+            seed=seed + 90_000,
+        )
+        print("[bc] cached checkpoint eval: " + " ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items()))
+        if logger is not None:
+            logger.log_dict(eval_metrics, step=0, prefix="bc")
+            logger.flush()
+        min_capture = bc_cfg.get("min_eval_capture_rate")
+        if min_capture is not None and eval_metrics["bc_eval/capture_rate"] < float(min_capture):
+            print(
+                f"[bc] WARNING: cached BC capture_rate={eval_metrics['bc_eval/capture_rate']:.3f} "
+                f"< min_eval_capture_rate={float(min_capture):.3f}. "
+                "Delete the checkpoint and re-run with --overwrite-configs or set skip_if_exists: false."
+            )
         return ckpt_path
 
     expert_name = str(bc_cfg.get("expert", "fixed_ring"))
@@ -186,6 +304,34 @@ def run_bc_warmstart(
     }
     torch.save(save_payload, ckpt_path)
     print(f"[bc] saved warm-start checkpoint: {ckpt_path}")
+
+    log_std_after = bc_cfg.get("log_std_after_bc")
+    if log_std_after is not None:
+        set_policy_log_std(policy, float(log_std_after))
+        print(f"[bc] set policy log_std to {float(log_std_after)}")
+
+    eval_episodes = int(bc_cfg.get("eval_episodes", 20))
+    eval_metrics = evaluate_bc_clone(
+        env,
+        policy,
+        expert_get_actions,
+        num_episodes=eval_episodes,
+        seed=seed + 80_000,
+        deterministic=True,
+    )
+    print("[bc] post-train eval: " + " ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items()))
+    if logger is not None:
+        logger.log_dict(eval_metrics, step=num_epochs, prefix="bc")
+        logger.flush()
+
+    min_capture = bc_cfg.get("min_eval_capture_rate")
+    if min_capture is not None and eval_metrics["bc_eval/capture_rate"] < float(min_capture):
+        raise RuntimeError(
+            "BC warm-start failed quality gate: "
+            f"capture_rate={eval_metrics['bc_eval/capture_rate']:.3f} "
+            f"< min_eval_capture_rate={float(min_capture):.3f}. "
+            "Try expert=oracle_slot, more bc epochs, or role_features_enabled: false."
+        )
 
     if bc_env is not env:
         try:

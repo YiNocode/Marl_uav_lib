@@ -2,7 +2,7 @@ benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: mappo_bc
-  description: MAPPO with fixed-ring behavior cloning warm-start, then on-policy fine-tuning.
+  description: MAPPO with oracle-slot BC warm-start and protected fine-tuning.
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml
 model: configs/model/centralized_critic.yaml
@@ -37,26 +37,32 @@ task:
   radial_compress_reward_scale: 0.0
   radial_overshoot_penalty_scale: 0.0
   encirclement_capture_enabled: true
+  role_features_enabled: true
   debug: false
 bc_warmstart:
   enabled: true
-  expert: fixed_ring
-  fixed_ring:
-    ring_radius: 1.6
-    approach_gain: 0.25
+  expert: oracle_slot
+  oracle_slot:
+    xy_gain: 0.25
     z_gain: 0.2
-    phase: 0.0
-    assignment: fixed
-  num_epochs: 80
-  episodes_per_epoch: 40
+  num_epochs: 15
+  episodes_per_epoch: 48
   batch_size: 512
-  lr: 0.0003
+  lr: 0.0005
   max_grad_norm: 0.5
-  mse_coef: 0.1
-  log_interval: 1
+  mse_coef: 0.25
+  log_interval: 5
   checkpoint_name: bc_pretrained.pt
-  skip_if_exists: true
+  skip_if_exists: True
   load_for_mappo: true
+  log_std_after_bc: -2.0
+  eval_episodes: 20
+  min_eval_capture_rate: 0.25
+mappo_finetune:
+  deterministic_rollout_epochs: 800
+  entropy_coef_start: 0.0
+  entropy_coef_end: 0.001
+  entropy_coef_ramp_epochs: 1500
 seed: 101
 num_envs: 1
 num_epochs: 3000

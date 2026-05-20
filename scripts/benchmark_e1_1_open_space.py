@@ -109,13 +109,17 @@ def generate_train_configs(
     return written
 
 
-def checkpoint_path_for_config(cfg_path: Path) -> Path:
+def checkpoint_path_for_config(
+    cfg_path: Path,
+    checkpoint_name: str | None = None,
+) -> Path:
     cfg = load_config(cfg_path)
     seed = int(cfg.get("seed", 0))
     result_dir = Path(str(cfg.get("train_results_dir") or f"results/{cfg_path.stem}"))
     if not result_dir.is_absolute():
         result_dir = ROOT / result_dir
-    return result_dir / "checkpoints" / str(seed) / "best.pt"
+    name = str(checkpoint_name or "best.pt")
+    return result_dir / "checkpoints" / str(seed) / name
 
 
 def _bc_checkpoint_path_for_config(cfg_path: Path) -> Path:
@@ -295,7 +299,12 @@ def _episode_metrics(
     }
 
 
-def _build_rl_worker(cfg_path: Path, seed: int) -> RolloutWorker:
+def _build_rl_worker(
+    cfg_path: Path,
+    seed: int,
+    *,
+    checkpoint_name: str | None = None,
+) -> RolloutWorker:
     cfg = load_config(cfg_path)
     env_cfg_path = ROOT / str(cfg["env"])
     algo_cfg_path = ROOT / str(cfg["algo"])
@@ -312,13 +321,22 @@ def _build_rl_worker(cfg_path: Path, seed: int) -> RolloutWorker:
     mac = MAC(obs_dim=env.obs_dim, n_actions=n_actions, n_agents=env.num_agents)
     mac.policy = policy_core
     learner = build_learner(algo_cfg_path, policy_core)
-    ckpt = checkpoint_path_for_config(cfg_path)
+    ckpt = checkpoint_path_for_config(cfg_path, checkpoint_name)
     if not ckpt.is_file():
         raise FileNotFoundError(
             f"Missing checkpoint for {cfg_path.relative_to(ROOT)}: {ckpt}. "
             "Run benchmark_e1_1_open_space.py --mode train first."
         )
     load_checkpoint(ckpt, learner)
+    bc_cfg = dict(cfg.get("bc_warmstart") or {})
+    log_std_after = bc_cfg.get("log_std_after_bc")
+    if log_std_after is not None and (
+        checkpoint_name is None
+        or checkpoint_name == str(bc_cfg.get("checkpoint_name", "bc_pretrained.pt"))
+    ):
+        from marl_uav.runners.bc_pretrainer import set_policy_log_std
+
+        set_policy_log_std(policy_core, float(log_std_after))
     mac.set_test_mode(True)
     return RolloutWorker(env=env, policy=mac)
 
@@ -440,6 +458,7 @@ def run_evaluation(
     *,
     episodes_override: int | None,
     allow_missing_checkpoints: bool,
+    checkpoint_name: str | None = None,
 ) -> None:
     seeds = [int(s) for s in suite.get("seeds", [101, 102, 103])]
     eval_cfg = dict(suite.get("eval", {}) or {})
@@ -460,7 +479,11 @@ def run_evaluation(
                 if not cfg_path.is_file():
                     generate_train_configs(suite, [method], overwrite=False)
                 try:
-                    worker = _build_rl_worker(cfg_path, seed=base_seed + seed)
+                    worker = _build_rl_worker(
+                        cfg_path,
+                        seed=base_seed + seed,
+                        checkpoint_name=checkpoint_name,
+                    )
                 except FileNotFoundError as exc:
                     if allow_missing_checkpoints:
                         print(f"[eval] skip missing checkpoint: {exc}")
@@ -539,6 +562,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--methods", nargs="*", default=["mappo"])
     p.add_argument("--episodes", type=int, default=10)
+    p.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="RL checkpoint file name under checkpoints/<seed>/ (default: best.pt). "
+        "Use bc_pretrained.pt to evaluate BC warm-start only.",
+    )
     p.add_argument("--overwrite-configs", action="store_true")
     p.add_argument("--skip-existing-checkpoints", action="store_true")
     p.add_argument("--allow-missing-checkpoints", action="store_true")
@@ -576,6 +606,7 @@ def main() -> None:
             methods,
             episodes_override=args.episodes,
             allow_missing_checkpoints=bool(args.allow_missing_checkpoints),
+            checkpoint_name=args.checkpoint,
         )
 
 

@@ -10,6 +10,10 @@ import numpy as np
 from marl_uav.buffers.vec_rollout_buffer import VecRolloutBuffer
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
+from marl_uav.utils.mappo_finetune import (
+    deterministic_rollout_for_epoch,
+    entropy_coef_for_epoch,
+)
 
 if TYPE_CHECKING:
     from marl_uav.utils.checkpoint import CheckpointManager
@@ -156,11 +160,14 @@ class VecEnvTrainer(BaseRunner):
         obs: np.ndarray,
         state: np.ndarray,
         avail_actions: np.ndarray | None,
+        *,
+        deterministic: bool | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         actions, log_probs, values = self.policy.select_actions(
             obs,
             state=state,
             avail_actions=avail_actions,
+            deterministic=deterministic,
         )
 
         def _to_numpy(x: Any) -> np.ndarray:
@@ -367,6 +374,8 @@ class VecEnvTrainer(BaseRunner):
         seed: int = 42,
         log_interval: int = 1,
         profile_timing: bool = False,
+        finetune_cfg: dict[str, Any] | None = None,
+        default_entropy_coef: float | None = None,
     ) -> Dict[str, Any]:
         initial_reset_wall_s = 0.0
         initial_worker_reset_s_sum = 0.0
@@ -402,7 +411,22 @@ class VecEnvTrainer(BaseRunner):
         episode_lengths = np.zeros((num_envs,), dtype=np.int32)
         self._reset_tb_trackers(num_envs)
 
+        finetune = dict(finetune_cfg or {})
+        base_entropy = (
+            float(default_entropy_coef)
+            if default_entropy_coef is not None
+            else float(getattr(self.learner, "entropy_coef", 0.0))
+        )
+
         for epoch in range(num_epochs):
+            det_rollout = deterministic_rollout_for_epoch(finetune, epoch)
+            if hasattr(self.policy, "set_test_mode"):
+                self.policy.set_test_mode(det_rollout)
+            if hasattr(self.learner, "entropy_coef"):
+                self.learner.entropy_coef = entropy_coef_for_epoch(
+                    self.learner, finetune, epoch, base_entropy
+                )
+
             self.vec_env_manager.set_training_progress(epoch=epoch, num_epochs=num_epochs)
             buffer = VecRolloutBuffer(
                 num_steps=rollout_steps,
@@ -431,7 +455,9 @@ class VecEnvTrainer(BaseRunner):
                 if profile_timing:
                     t_roll0 = time.perf_counter()
                     tp0 = time.perf_counter()
-                    actions, log_probs, values = self._select_actions(obs, state, avail_actions)
+                    actions, log_probs, values = self._select_actions(
+                        obs, state, avail_actions, deterministic=det_rollout
+                    )
                     policy_time += time.perf_counter() - tp0
                     ts0 = time.perf_counter()
                     step_result = self.vec_env_manager.step(actions)
@@ -443,7 +469,9 @@ class VecEnvTrainer(BaseRunner):
                     rollout_time += time.perf_counter() - t_roll0
                 else:
                     t0 = time.time()
-                    actions, log_probs, values = self._select_actions(obs, state, avail_actions)
+                    actions, log_probs, values = self._select_actions(
+                        obs, state, avail_actions, deterministic=det_rollout
+                    )
                     step_result = self.vec_env_manager.step(actions)
                     next_values = self._evaluate_values(step_result.gae_next_obs, step_result.gae_next_state)
                     next_values = next_values * (1.0 - step_result.terminated[:, None].astype(np.float32))

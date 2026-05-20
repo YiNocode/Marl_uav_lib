@@ -79,24 +79,28 @@ class CheckpointManager:
 
 
 def load_checkpoint(path: str | Path, learner: Any) -> dict[str, Any]:
-    """从 checkpoint 文件加载 learner 参数并返回完整 state 字典."""
+    """从 checkpoint 加载参数并返回完整 state 字典.
+
+    支持两种格式：
+    - MAPPO/PPO 训练保存：``{"learner": learner.state_dict(), ...}``
+    - BC 预训练保存：``{"policy": policy.state_dict(), ...}``
+    """
 
     data = torch.load(Path(path), map_location="cpu")
     learner_state = data.get("learner")
     if learner_state is not None and hasattr(learner, "load_state_dict"):
-        # #region agent log
-        try:
-            import json
-            policy_state = learner_state.get("policy") or {}
-            ckpt_critic = policy_state.get("critic_encoder.net.0.weight")
-            ckpt_actor = policy_state.get("actor_encoder.net.0.weight")
-            cur = getattr(learner, "policy", None)
-            cur_critic_sh = list(cur.state_dict()["critic_encoder.net.0.weight"].shape) if cur and "critic_encoder.net.0.weight" in cur.state_dict() else None
-            cur_actor_sh = list(cur.state_dict()["actor_encoder.net.0.weight"].shape) if cur and "actor_encoder.net.0.weight" in cur.state_dict() else None
-
-        except Exception:
-            pass
-        # #endregion
         learner.load_state_dict(learner_state)  # type: ignore[no-untyped-call]
+        return data
+
+    policy_state = data.get("policy")
+    if policy_state is not None:
+        policy = getattr(learner, "policy", None)
+        if policy is not None and hasattr(policy, "load_state_dict"):
+            policy.load_state_dict(policy_state)  # type: ignore[no-untyped-call]
+            return data
+        if hasattr(learner, "load_state_dict"):
+            learner.load_state_dict(policy_state)  # type: ignore[no-untyped-call]
+            return data
+
     return data
 
