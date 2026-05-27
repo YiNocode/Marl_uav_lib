@@ -1,11 +1,11 @@
 # E1.1 main benchmark, open-space / obstacle-free, PyFlyt.
-# Method: plain MAPPO baseline.
+# Baseline: RL execution backend only (vanilla MAPPO), no SCE geometry/role/structure stack.
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: mappo
-  description: Pure MAPPO on the base pursuit task; no structure observation, no structure reward shaping, no DREAM manifold policy.
+  description: Vanilla MAPPO execution backend on base 3v1 task; no deformable manifold, role assignment, or structure-aware guidance (necessary comparator, not the proposed framework).
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml

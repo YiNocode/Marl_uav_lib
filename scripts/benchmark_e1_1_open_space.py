@@ -1,12 +1,12 @@
-"""E1.1 open-space main benchmark runner.
+"""E1.1 open-space benchmark: structure-preserving encirclement vs. baselines.
 
-This script keeps the main benchmark separate from older ex1/ex2 scripts:
+Compares framework instances (dream_mappo_full), RL execution backends (mappo, …),
+and geometric heuristics — not framed as "MAPPO variant" ablations.
 
-- generates per-method/per-seed training configs under configs/generated/e1_1_open_space/
-- trains RL methods through the existing scripts/train.py entry point
-- evaluates RL checkpoints and the fixed-ring heuristic on PyFlyt
-- writes per-episode records plus by-seed/by-method summaries under
-  results/e1_1_open_space_pyflyt/
+- generates per-method/per-seed configs under configs/generated/e1_1_open_space/
+- trains RL methods via scripts/train.py
+- evaluates checkpoints and heuristics on PyFlyt
+- writes task + structure metrics to results/e1_1_open_space_pyflyt/
 """
 
 from __future__ import annotations
@@ -558,7 +558,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         choices=("generate-configs", "pretrain", "train", "eval", "all"),
-        default="eval",
+        default="train",
     )
     p.add_argument("--methods", nargs="*", default=["mappo"])
     p.add_argument("--episodes", type=int, default=10)

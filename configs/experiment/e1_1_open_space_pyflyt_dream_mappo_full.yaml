@@ -1,11 +1,13 @@
 ﻿# E1.1 main benchmark, open-space / obstacle-free, PyFlyt.
-# Method: DREAM-MAPPO full method.
+# Framework: structure_preserving_encirclement (full SCE instance).
+# execution_backend: mappo | manifold: closed_curve | role_allocator: nearest (+ inertia)
+# Legacy method key dream_mappo_full kept for scripts/benchmark_e1_1_open_space.py.
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: dream_mappo_full
-  description: DREAM-MAPPO full method, MAPPO learner plus deformable manifold policy head, ex1 role assignment, and structure rewards.
+  description: Full structure-preserving encirclement framework with deformable manifold, nearest-permutation role assignment, structure rewards, and MAPPO execution backend (not a new MAPPO algorithm).
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/dream_mappo.yaml
@@ -30,8 +32,8 @@ task:
   oob_penalty: 30.0
   evader_boundary_gain: 0.8
   mean_progress_reward_scale: 0.5
-  capture_bonus_team: 30.0
-  capture_bonus_individual: 10.0
+  capture_bonus_team: 200.0
+  capture_bonus_individual: 50.0
   progress_dist_norm: 2.0
   continuous_action_xy_ref: 0.25
   continuous_action_yaw_ref: 0.01

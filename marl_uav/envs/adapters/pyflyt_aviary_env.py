@@ -190,8 +190,30 @@ class PyFlytAviaryEnv(BaseEnv):
             evader_pos = lin_pos[self.task_state.evader_id]
             dists = np.linalg.norm(pursuer_pos - evader_pos[None, :], axis=1).astype(np.float32)
             mean_goal_distance = float(np.mean(dists))  # 这里“目标”理解为 evader
-            reward_time_penalty = -0.01 * self.num_agents
-            reward_collision_penalty = -float(self.num_agents) if np.any(backend_state.contact_array) else 0.0
+            prev_dists = np.asarray(
+                getattr(self.task_state, "prev_pursuer_dists", dists),
+                dtype=np.float32,
+            ).reshape(-1)
+            if prev_dists.shape[0] != dists.shape[0]:
+                prev_dists = dists.copy()
+            progress_norm = max(
+                float(getattr(self.task, "progress_dist_norm", 2.0)),
+                1e-6,
+            )
+            per_progress = np.clip((prev_dists - dists) / progress_norm, -1.0, 1.0)
+            reward_progress = float(np.sum(per_progress))
+            time_penalty = float(getattr(self.task, "time_penalty", 0.05))
+            reward_time_penalty = -time_penalty * self.num_agents
+            coll_pen = float(getattr(self.task, "collision_penalty", 2.0))
+            reward_collision_penalty = 0.0
+            if np.any(backend_state.contact_array):
+                ca = np.asarray(backend_state.contact_array)
+                pursuer_ids = np.asarray(self.task_state.pursuer_ids, dtype=np.int64)
+                if ca.ndim == 2 and ca.shape[0] > int(np.max(pursuer_ids)):
+                    p_coll_mask = np.any(ca[pursuer_ids, :] != 0, axis=1)
+                else:
+                    p_coll_mask = np.full((len(pursuer_ids),), bool(np.any(ca)), dtype=bool)
+                reward_collision_penalty = -coll_pen * float(np.sum(p_coll_mask))
         # 其他任务暂不填充诊断细节
 
         # 追逃任务需要检测“是否在本步新发生捕获”

@@ -1,7 +1,8 @@
-# Dream-MAPPO training hyperparameters.
+# Execution-backend hyperparameters for the SCE framework (legacy key: dream_mappo).
 #
-# Dream-MAPPO uses the same PPO/MAPPO learner path as centralized-critic PPO,
-# but the policy architecture is selected by configs/model/dream_mappo_centralized.yaml.
+# framework: structure_preserving_encirclement
+# execution_backend: mappo  (standard centralized-critic PPO/MAPPO learner — not modified)
+# policy_head: configs/model/dream_mappo_centralized.yaml (manifold + role-conditioned actor)
 
 algo: dream_mappo
 action_space: continuous

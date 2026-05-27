@@ -24,7 +24,11 @@ from marl_uav.runners.bc_pretrainer import (
     run_bc_warmstart,
     set_policy_log_std,
 )
-from marl_uav.utils.mappo_finetune import resolve_mappo_finetune_cfg
+from marl_uav.utils.mappo_finetune import (
+    attach_bc_anchor_to_learner,
+    resolve_mappo_finetune_cfg,
+    uses_bc_finetune,
+)
 from marl_uav.runners.evaluator import Evaluator
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
@@ -361,6 +365,17 @@ def main() -> None:
 
     finetune_cfg = resolve_mappo_finetune_cfg(train_cfg)
     default_entropy_coef = float(getattr(learner, "entropy_coef", 0.0))
+    if uses_bc_finetune(finetune_cfg) and isinstance(learner, MAPPOLearner):
+        log_std_after = bc_cfg.get("log_std_after_bc")
+        attach_bc_anchor_to_learner(
+            learner,
+            policy=policy_core,
+            bc_ckpt_path=bc_ckpt_path,
+            device=train_device,
+            log_std_after_bc=float(log_std_after) if log_std_after is not None else None,
+        )
+        if hasattr(learner, "apply_finetune_epoch"):
+            learner.apply_finetune_epoch(finetune_cfg, epoch=0)
 
     if args.bc_only:
         tb_logger.flush()
@@ -447,6 +462,9 @@ def main() -> None:
             print(
                 "[train] mappo_finetune: "
                 f"deterministic_rollout_epochs={int(finetune_cfg.get('deterministic_rollout_epochs', 0))} "
+                f"protected_epochs={int(finetune_cfg.get('protected_epochs', 0))} "
+                f"freeze_actor_epochs={int(finetune_cfg.get('freeze_actor_epochs', 0))} "
+                f"bc_kl_coef={float(finetune_cfg.get('bc_kl_coef', 0.0) or 0.0)} "
                 f"entropy_coef_start={finetune_cfg.get('entropy_coef_start')}"
             )
         if num_envs > 1:

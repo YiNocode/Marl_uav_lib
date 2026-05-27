@@ -26,8 +26,8 @@ task:
   oob_penalty: 30.0
   evader_boundary_gain: 0.8
   mean_progress_reward_scale: 0.5
-  capture_bonus_team: 30.0
-  capture_bonus_individual: 10.0
+  capture_bonus_team: 200.0
+  capture_bonus_individual: 50.0
   progress_dist_norm: 2.0
   continuous_action_xy_ref: 0.25
   continuous_action_yaw_ref: 0.01

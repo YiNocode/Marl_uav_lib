@@ -1,4 +1,5 @@
-# Dream-MAPPO ex2 on Genesis 3v1 pursuit with cylindrical obstacles.
+# SCE framework ex2 (obstacle-aware deformable manifold) on Genesis.
+# execution_backend: mappo. Legacy bundle name: dream_mappo.
 #
 # Keep this file aligned with:
 #   configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml

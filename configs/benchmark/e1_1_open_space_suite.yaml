@@ -1,4 +1,6 @@
-# E1.1 main benchmark suite: open-space / obstacle-free PyFlyt.
+# E1.1 main benchmark suite (paper E1): open-space / obstacle-free PyFlyt.
+# Compares structure-preserving encirclement framework instances vs. RL/heuristic baselines.
+# Method keys (e.g. dream_mappo_full) are legacy run IDs; see docs/FRAMEWORK.md.
 
 suite: E1
 scenario: e1_1_open_space
@@ -6,7 +8,7 @@ backend: pyflyt
 result_root: results/e1_1_open_space_pyflyt
 generated_config_dir: configs/generated/e1_1_open_space
 
-seeds: [101]
+seeds: [103]
 eval:
   base_seed: 7010
   episodes_per_seed: 200
@@ -20,6 +22,10 @@ methods:
   mappo_bc:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc.yaml
+    train: true
+  mappo_bc_improve:
+    kind: rl
+    config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc_improve.yaml
     train: true
   reward_shaped_mappo:
     kind: rl

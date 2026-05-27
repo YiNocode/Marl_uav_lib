@@ -12,6 +12,8 @@ from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.utils.mappo_finetune import (
+    apply_capture_adaptive_bc_kl,
+    apply_learner_finetune_epoch,
     deterministic_rollout_for_epoch,
     entropy_coef_for_epoch,
 )
@@ -167,8 +169,17 @@ class Trainer(BaseRunner):
         )
         policy = getattr(self.rollout_worker, "policy", None)
         mac_policy = policy
+        last_capture_rate: float | None = None
+        peak_capture_rate = 0.0
 
         for epoch in range(num_epochs):
+            apply_learner_finetune_epoch(self.learner, finetune, epoch)
+            apply_capture_adaptive_bc_kl(
+                self.learner,
+                finetune,
+                rolling_capture=last_capture_rate,
+                peak_capture=peak_capture_rate,
+            )
             if mac_policy is not None and hasattr(mac_policy, "set_test_mode"):
                 mac_policy.set_test_mode(deterministic_rollout_for_epoch(finetune, epoch))
             if hasattr(self.learner, "entropy_coef"):
@@ -180,6 +191,7 @@ class Trainer(BaseRunner):
             epoch_returns: list[float] = []
             epoch_lens: list[int] = []
             epoch_losses: list[Dict[str, Any]] = []
+            epoch_captures: list[float] = []
             rollout_time = 0.0
             update_time = 0.0
             env_timing_totals: Dict[str, float] = {}
@@ -202,6 +214,7 @@ class Trainer(BaseRunner):
 
                 epoch_returns.append(float(info["episode_return"]))
                 epoch_lens.append(int(info["episode_len"]))
+                epoch_captures.append(1.0 if bool(info.get("capture", False)) else 0.0)
 
                 batch = self._postprocess_episode(episode)
                 loss_dict = self._call_learner(batch)
@@ -216,6 +229,9 @@ class Trainer(BaseRunner):
             all_episode_lens.extend(epoch_lens)
             all_loss_vals.extend(epoch_losses)
             total_env_steps += steps_collected
+            if epoch_captures:
+                last_capture_rate = float(np.mean(epoch_captures))
+                peak_capture_rate = max(peak_capture_rate, last_capture_rate)
 
             if log_interval > 0 and (epoch + 1) % log_interval == 0:
                 avg_ret = float(np.mean(epoch_returns)) if epoch_returns else 0.0

@@ -1,8 +1,6 @@
-# Dream-MAPPO ex1 on PyFlyt 3v1 pursuit.
-#
-# ex1 adds structure-aware observations/rewards for encirclement geometry.
-# The Genesis counterpart is:
-#   configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml
+# SCE framework (ex1) on PyFlyt 3v1 — deformable manifold + role features + structure guidance.
+# execution_backend: mappo (configs/algo/dream_mappo.yaml). Legacy bundle name: dream_mappo.
+# Genesis counterpart: configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml
 
 env: configs/env/pyflyt_3v1.yaml
 algo: configs/algo/dream_mappo.yaml

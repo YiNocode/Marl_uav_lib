@@ -13,6 +13,16 @@ from torch.optim import Adam
 
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.learners.tensor_utils import tensor_from_numpy_on_device
+from marl_uav.utils.mappo_finetune import (
+    adaptive_bc_kl_coef,
+    actor_lr_scale_for_epoch,
+    bc_kl_coef_for_epoch,
+    freeze_actor_for_epoch,
+    iter_actor_modules,
+    iter_critic_modules,
+    ppo_inner_epochs_for_epoch,
+    set_policy_actor_trainable,
+)
 
 
 class MAPPOLearner(BaseLearner):
@@ -32,7 +42,9 @@ class MAPPOLearner(BaseLearner):
         target_kl: float | None = None,
     ) -> None:
         self.policy = policy
-        self.optimizer = Adam(self.policy.parameters(), lr=lr)
+        self._base_lr = float(lr)
+        self._base_ppo_epochs = int(num_epochs)
+        self.optimizer = self._build_optimizer(self._base_lr, actor_lr_scale=1.0)
         self.clip_range = float(clip_range)
         self.value_coef = float(value_coef)
         self.entropy_coef = float(entropy_coef)
@@ -40,6 +52,80 @@ class MAPPOLearner(BaseLearner):
         self.num_epochs = int(num_epochs)
         self.minibatch_size = int(minibatch_size)
         self.target_kl = None if target_kl is None else float(target_kl)
+        self.bc_policy_anchor: nn.Module | None = None
+        self._freeze_actor = False
+        self._bc_kl_coef = 0.0
+        self._bc_kl_coef_base = 0.0
+        self._actor_lr_scale = 1.0
+
+    def _build_optimizer(self, lr: float, *, actor_lr_scale: float) -> Adam:
+        actor_params: list[nn.Parameter] = []
+        critic_params: list[nn.Parameter] = []
+        seen: set[int] = set()
+        for mod in iter_actor_modules(self.policy):
+            for param in mod.parameters():
+                pid = id(param)
+                if pid not in seen:
+                    seen.add(pid)
+                    actor_params.append(param)
+        for mod in iter_critic_modules(self.policy):
+            for param in mod.parameters():
+                pid = id(param)
+                if pid not in seen:
+                    seen.add(pid)
+                    critic_params.append(param)
+        if not actor_params and not critic_params:
+            return Adam(self.policy.parameters(), lr=lr)
+        groups: list[dict[str, Any]] = []
+        if actor_params:
+            groups.append({"params": actor_params, "lr": lr * float(actor_lr_scale)})
+        if critic_params:
+            groups.append({"params": critic_params, "lr": lr})
+        return Adam(groups)
+
+    def _set_actor_lr_scale(self, scale: float) -> None:
+        self._actor_lr_scale = float(scale)
+        if not self.optimizer.param_groups:
+            return
+        actor_group = self.optimizer.param_groups[0]
+        if len(self.optimizer.param_groups) > 1:
+            actor_group["lr"] = self._base_lr * self._actor_lr_scale
+        else:
+            actor_group["lr"] = self._base_lr
+
+    def set_bc_policy_anchor(self, anchor: nn.Module | None) -> None:
+        """Frozen BC policy for KL regularization during MAPPO fine-tune."""
+        self.bc_policy_anchor = anchor
+        if anchor is not None:
+            anchor.eval()
+            for param in anchor.parameters():
+                param.requires_grad_(False)
+
+    def apply_finetune_epoch(self, finetune_cfg: dict[str, Any], epoch: int) -> None:
+        """Update per-epoch BC fine-tune flags (only used when ``mappo_finetune`` is set)."""
+        self._freeze_actor = freeze_actor_for_epoch(finetune_cfg, epoch)
+        self._bc_kl_coef_base = bc_kl_coef_for_epoch(finetune_cfg, epoch)
+        self._bc_kl_coef = self._bc_kl_coef_base
+        set_policy_actor_trainable(self.policy, trainable=not self._freeze_actor)
+        self._set_actor_lr_scale(actor_lr_scale_for_epoch(finetune_cfg, epoch))
+        self.num_epochs = ppo_inner_epochs_for_epoch(
+            finetune_cfg, epoch, self._base_ppo_epochs
+        )
+
+    def apply_capture_adaptive_bc_kl(
+        self,
+        finetune_cfg: dict[str, Any],
+        *,
+        rolling_capture: float | None,
+        peak_capture: float | None,
+    ) -> None:
+        """Adjust ``bc_kl_coef`` from rolling train capture (mappo_bc adaptive mode)."""
+        self._bc_kl_coef = adaptive_bc_kl_coef(
+            finetune_cfg,
+            base_coef=self._bc_kl_coef_base,
+            rolling_capture=rolling_capture,
+            peak_capture=peak_capture,
+        )
 
     def _maybe_adjust_advantages(
         self,
@@ -191,6 +277,7 @@ class MAPPOLearner(BaseLearner):
         total_ratio_mean = 0.0
         total_ratio_max = 0.0
         total_ratio_min = 0.0
+        total_bc_kl = 0.0
         max_approx_kl = 0.0
         max_clip_fraction = 0.0
         max_grad_norm_seen = 0.0
@@ -198,6 +285,11 @@ class MAPPOLearner(BaseLearner):
         min_ratio_seen = float("inf")
         early_stop = False
         n_mb_updates = 0
+        use_bc_kl = (
+            not self._freeze_actor
+            and self._bc_kl_coef > 0.0
+            and self.bc_policy_anchor is not None
+        )
 
         for _ in range(self.num_epochs):
             random.shuffle(chunk_starts)
@@ -240,7 +332,27 @@ class MAPPOLearner(BaseLearner):
 
                 value_loss = 0.5 * torch.mean((ret_c_t - values_flat) ** 2)
                 entropy_mean = torch.mean(entropy_flat)
-                loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy_mean
+                bc_kl_term = 0.0
+                if use_bc_kl:
+                    bc_log_probs, _, _ = self.bc_policy_anchor.evaluate_actions(  # type: ignore[attr-defined]
+                        obs=obs_c,
+                        actions=actions_c,
+                        state=state_c,
+                        avail_actions=avail_c,
+                    )
+                    bc_log_probs_flat = bc_log_probs.reshape(chunk_size).to(self.device)
+                    bc_kl_term = torch.mean(new_log_probs_flat - bc_log_probs_flat.detach())
+
+                if self._freeze_actor:
+                    loss = self.value_coef * value_loss
+                else:
+                    loss = (
+                        policy_loss
+                        + self.value_coef * value_loss
+                        - self.entropy_coef * entropy_mean
+                    )
+                    if use_bc_kl:
+                        loss = loss + self._bc_kl_coef * bc_kl_term
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -268,6 +380,8 @@ class MAPPOLearner(BaseLearner):
                 total_ratio_mean += ratio_mean
                 total_ratio_max += ratio_max
                 total_ratio_min += ratio_min
+                if use_bc_kl:
+                    total_bc_kl += float(bc_kl_term.item())
                 max_approx_kl = max(max_approx_kl, approx_kl)
                 max_clip_fraction = max(max_clip_fraction, clip_fraction)
                 max_grad_norm_seen = max(max_grad_norm_seen, grad_norm)
@@ -282,7 +396,7 @@ class MAPPOLearner(BaseLearner):
                 break
 
         denom = max(float(n_mb_updates), 1.0)
-        return {
+        metrics: Dict[str, Any] = {
             "loss/policy_loss": total_policy_loss / denom,
             "loss/value_loss": total_value_loss / denom,
             "loss/entropy": total_entropy / denom,
@@ -298,7 +412,14 @@ class MAPPOLearner(BaseLearner):
             "train/max_ratio": max_ratio_seen if n_mb_updates > 0 else 0.0,
             "train/min_ratio": min_ratio_seen if n_mb_updates > 0 else 0.0,
             "train/early_stop": float(1.0 if early_stop else 0.0),
+            "train/freeze_actor": float(1.0 if self._freeze_actor else 0.0),
+            "train/actor_lr_scale": self._actor_lr_scale,
+            "train/ppo_inner_epochs": float(self.num_epochs),
+            "train/bc_kl_coef": self._bc_kl_coef,
         }
+        if use_bc_kl:
+            metrics["loss/bc_kl"] = total_bc_kl / denom
+        return metrics
 
     def train(self, batch: Any) -> dict:  # type: ignore[override]
         return self.update(batch)

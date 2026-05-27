@@ -1,25 +1,18 @@
-# E1.1 open-space: residual skill-preserving fine-tune (BC warm-start + MAPPO backend).
-# framework: structure_preserving_encirclement (partial — ex1 task + finetune guards)
-# execution_backend: mappo
+# Residual fine-tune variant: MAPPO backend after BC, relaxed capture guards.
+# Requires bc_pretrained.pt from mappo_bc pretrain.
 #
-# Use oracle_slot (not fixed_ring) so expert targets match ex1 role/slot obs.
-#
-# Training:
-#   python scripts/benchmark_e1_1_open_space.py --mode train --methods mappo_bc --overwrite-configs
-#
-# Re-run BC only (delete checkpoints/.../bc_pretrained.pt first):
-#   python scripts/benchmark_e1_1_open_space.py --mode pretrain --methods mappo_bc --overwrite-configs
+#   python scripts/benchmark_e1_1_open_space.py --mode train --methods mappo_bc_improve --overwrite-configs
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
-  method: mappo_bc
-  description: SCE-style ex1 stack with oracle-slot BC pretrain and capture-protected MAPPO fine-tuning (execution backend only).
+  method: mappo_bc_improve
+  description: SCE ex1 stack — BC warm-start + MAPPO fine-tune with relaxed capture protection (execution backend tuning, not framework core).
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
-algo: configs/algo/mappo_bc_finetune.yaml
+algo: configs/algo/mappo_bc_improve.yaml
 model: configs/model/centralized_critic.yaml
-train_results_dir: results/e1_1_open_space_pyflyt/training/mappo_bc
+train_results_dir: results/e1_1_open_space_pyflyt/training/mappo_bc_improve
 
 task:
   name: pursuit_evasion_3v1_ex1
@@ -29,7 +22,7 @@ task:
   capture_dist: 1.0
   episode_limit: 1000
   pursuer_speed: 0.15
-  evader_speed: 0.2
+  evader_speed: 0.10
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -56,7 +49,6 @@ task:
 
 bc_warmstart:
   enabled: true
-  # Must match ex1 slot assignment in observations (fixed_ring does not).
   expert: oracle_slot
   oracle_slot:
     xy_gain: 0.25
@@ -69,39 +61,36 @@ bc_warmstart:
   mse_coef: 0.25
   log_interval: 5
   checkpoint_name: bc_pretrained.pt
-  skip_if_exists: True
+  skip_if_exists: true
   load_for_mappo: true
   log_std_after_bc: -2.0
   eval_episodes: 20
   min_eval_capture_rate: 0.25
 
 mappo_finetune:
-  # Unified guard: epoch < N keeps det rollout + zero entropy + frozen actor.
-  # Your cliff ~1100 matched staggered ends (freeze 500 / det 800 / KL decay).
-  protected_epochs: 1500
-  deterministic_rollout_epochs: 2000
+  # Shorter critic warmup; then allow exploration + weaker BC anchor.
+  protected_epochs: 600
+  freeze_actor_epochs: 600
+  deterministic_rollout_epochs: 1200
   entropy_coef_start: 0.0
-  entropy_coef_end: 0.0
-  entropy_coef_ramp_epochs: 3000
-  freeze_actor_epochs: 1500
+  entropy_coef_end: 0.0005
+  entropy_coef_ramp_epochs: 4000
   ppo_epochs_during_protection: 1
-  # After unfreeze: small actor steps + strong BC anchor (no KL decay).
-  actor_lr_scale_start: 0.05
+  actor_lr_scale_start: 0.15
   actor_lr_scale_end: 1.0
-  actor_lr_ramp_epochs: 2500
-  bc_kl_coef: 0.15
+  actor_lr_ramp_epochs: 3000
+  bc_kl_coef: 0.04
   bc_kl_coef_ramp_epochs: 0
-  # Hold capture when stable; relax KL slightly to allow improvement attempts.
   bc_kl_adaptive: true
-  bc_kl_capture_baseline: auto
-  bc_kl_regression_tolerance: 0.05
+  bc_kl_capture_baseline: 0.30
+  bc_kl_regression_tolerance: 0.10
   bc_kl_regression_boost: 4.0
-  bc_kl_relax_when_stable: 0.8
-  bc_kl_coef_max: 0.8
+  bc_kl_relax_when_stable: 0.4
+  bc_kl_coef_max: 0.25
 
-seed: 103
+seed: 102
 num_envs: 1
-num_epochs: 3000
+num_epochs: 5000
 rollout_steps: 1024
 vec_rollout_steps_mode: total
 log_interval: 1

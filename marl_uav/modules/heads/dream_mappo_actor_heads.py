@@ -1,4 +1,9 @@
-"""Dream-MAPPO：流形几何由 policy 用全局 state 预计算；本模块仅负责 obs 特征上的残差 tanh-高斯。"""
+"""SCE execution actor head (legacy module name dream_mappo).
+
+Manifold geometry is precomputed from global pursuit state; this module maps
+role-conditioned features to residual tanh-Gaussian actions. MAPPO/PPO training
+is unchanged — see configs/algo/dream_mappo.yaml.
+"""
 
 from __future__ import annotations
 

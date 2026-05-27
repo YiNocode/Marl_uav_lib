@@ -1,232 +1,145 @@
 # marl_uav_lib
 
-面向 3v1 无人机追逃实验的 MARL 研究代码。当前主线是 **Dream-MAPPO**，支持两类仿真后端：
+面向 3v1 无人机追逃实验的研究代码库，实现 **结构保持型多无人机协同围捕框架（Structure-Preserving Cooperative Encirclement, SCE）**。
 
-- **Genesis**：新的主要无人机仿真后端，使用 Genesis DroneEntity 和 `set_pos` 控制。
-- **PyFlyt**：保留的兼容后端，用于复现实验和对照。
+> **重要说明：** 本项目**不**提出新的 MAPPO 优化器。MAPPO / actor–critic 仅作为**标准学习型闭环执行后端（execution backend）**。主要研究贡献在于：可变形围捕流形生成、基于运输的角色分配（论文目标为熵正则最优传输；见 `docs/paper/TODO.md` 与当前实现的差异）、拓扑感知的结构目标，以及残差技能保持微调。详见 [`docs/FRAMEWORK.md`](docs/FRAMEWORK.md) 与 [`docs/paper/`](docs/paper/)。
 
-本文只保留与 Dream-MAPPO、Genesis、PyFlyt、ex1/ex2 实验直接相关的内容。
+**论文工作标题：** *Structure-preserving cooperative encirclement through deformable encirclement manifold generation and transport-based role allocation.*
 
-## 主要实验
+## 方法流水线（叙事）
 
-**ex1：结构感知围捕**
+```text
+逃逸者状态 + 环境上下文
+  → 可变形闭合曲线围捕流形
+  → 流形上的目标槽位采样
+  → 运输式角色分配
+  → 角色条件参考 / 拓扑感知结构引导
+  → 基于 RL 的闭环执行策略（本仓库：MAPPO 风格后端）
+```
 
-- 任务名：`pursuit_evasion_3v1_ex1`
-- 重点：结构感知观测、围捕结构奖励、覆盖/聚拢/角度指标。
-- PyFlyt 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml`
-- Genesis 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml`
+配置与代码中仍保留 **`dream_mappo`** 等历史命名（兼容训练脚本）；在论文与文档中应理解为 **「完整 SCE 框架 + MAPPO 执行后端」**，而非新的 RL 算法。
 
-**ex2：带圆柱障碍物的结构围捕**
+## 仿真后端
 
-- 任务名：`pursuit_evasion_3v1_ex2`
-- 重点：在 ex1 基础上加入圆柱障碍物、障碍物观测、障碍物避让流形和碰撞惩罚。
-- PyFlyt 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml`
-- Genesis 配置：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml`
+- **Genesis**：主要无人机仿真后端（`configs/env/genesis_3v1.yaml`）。
+- **PyFlyt**：兼容后端，用于复现与对照（`configs/env/pyflyt_3v1.yaml`）。
 
-Genesis 版 ex1/ex2 的训练参数与对应 PyFlyt 配置保持一致，主要差异仅是 `env` 指向 `configs/env/genesis_3v1.yaml`。
+## 实验场景（与论文 E1–E7 对应）
 
-## 后端配置
+| 论文块 | 仓库现状 | 入口 |
+|--------|----------|------|
+| **E1** 开敞空间围捕兼容性 | `configs/benchmark/e1_1_open_space_suite.yaml` | `scripts/benchmark_e1_1_open_space.py` |
+| **E2** 障碍物环境 | `pursuit_evasion_3v1_ex2` | `configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml` |
+| **E3–E4** 窄通道 / 多出口 | 待建场景 | 见 `docs/paper/TODO.md` |
+| **E5–E7** 消融 / 结构指标 / 运行时 | 部分脚本已有 | `docs/paper/03_experiments.md` |
 
-**Genesis 后端**
+**ex1（结构感知围捕）**
 
-- 环境配置：`configs/env/genesis_3v1.yaml`
-- 后端选择：`backend: genesis`
-- 动作空间：连续 `[vx, vy, yaw_rate, vz]`，动作上下界与 PyFlyt 3v1 保持一致。
-- 控制路径：task 输出高层速度 setpoint，`GenesisBackend` 读取当前 `pos`，用第 0、1、3 维按 `pos + [vx, vy, vz] * dt` 生成下一步目标位置并调用 `set_pos`。
-- Genesis 是可选依赖，只在请求 Genesis 后端时导入；未安装 Genesis 时 PyFlyt 路径不受影响。
+- 任务：`pursuit_evasion_3v1_ex1`
+- PyFlyt：`configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml`
+- Genesis：`configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml`
 
-**PyFlyt 后端**
+**ex2（圆柱障碍 + 可变形流形）**
 
-- 环境配置：`configs/env/pyflyt_3v1.yaml`
-- 后端选择：旧配置中的 `backend:` 字典仍按 PyFlyt 解释。
-- 默认训练关闭渲染：`render: False`。
+- 任务：`pursuit_evasion_3v1_ex2`
+- PyFlyt：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml`
+- Genesis：`configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml`
 
-## 训练命令
+## E1.1 主基准（开敞空间）
 
-在仓库根目录运行：
+对比 **围捕框架实例与基线**，而非「MAPPO 变体之争」：
 
 ```bash
 cd e:\lyn\year_1\research\marl_uav_lib
+
+# 生成配置 + 训练 + 评估 + 汇总 CSV
+python scripts/benchmark_e1_1_open_space.py --mode all
+
+# 仅评估已有 checkpoint
+python scripts/benchmark_e1_1_open_space.py --mode eval --methods dream_mappo_full mappo
 ```
 
-**Genesis + Dream-MAPPO ex1**
+方法键见 `configs/benchmark/e1_1_open_space_suite.yaml`（含 `mappo`、`dream_mappo_full`、`mappo_bc`、启发式基线等）。结果目录：`results/e1_1_open_space_pyflyt/`。
 
-```bash
-python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml
-```
+## 训练命令（单实验）
 
-**Genesis + Dream-MAPPO ex2**
+**Genesis + SCE 框架（ex2）**
 
 ```bash
 python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml
 ```
 
-兼容入口：
-
-```bash
-python scripts/train.py --train-config configs/train/genesis_3v1.yaml
-```
-
-`configs/train/genesis_3v1.yaml` 当前等价于 Genesis ex2 训练入口。
-
-**PyFlyt + Dream-MAPPO ex1**
+**PyFlyt + SCE 框架（ex1）**
 
 ```bash
 python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml
 ```
 
-**PyFlyt + Dream-MAPPO ex2**
+**E1.1 完整框架实例（开敞空间 benchmark）**
 
 ```bash
-python scripts/train.py --train-config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml
+python scripts/train.py --train-config configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml
 ```
+
+**MAPPO 执行后端基线（无 ex1 结构模块）**
+
+```bash
+python scripts/train.py --train-config configs/experiment/e1_1_open_space_pyflyt_mappo.yaml
+```
+
+兼容入口 `configs/train/genesis_3v1.yaml` 当前等价于 Genesis ex2。
 
 ## Guarded 训练入口
 
-`scripts/guarded_dream_mappo.py` 会为每次训练生成独立运行目录，并记录 stdout、monitor summary、checkpoint 和 TensorBoard 日志。
-
-默认运行 Genesis + Dream-MAPPO ex2：
-
-```bash
-python scripts/guarded_dream_mappo.py
-```
-
-Genesis ex1：
-
-```bash
-python scripts/guarded_dream_mappo.py --experiment ex1 --backend genesis
-```
-
-Genesis ex2：
+`scripts/guarded_dream_mappo.py` 记录独立运行目录（历史脚本名保留）：
 
 ```bash
 python scripts/guarded_dream_mappo.py --experiment ex2 --backend genesis
 ```
 
-PyFlyt ex1 / ex2：
-
-```bash
-python scripts/guarded_dream_mappo.py --experiment ex1 --backend pyflyt
-python scripts/guarded_dream_mappo.py --experiment ex2 --backend pyflyt
-```
-
-常用调试参数：
-
-```bash
-python scripts/guarded_dream_mappo.py --experiment ex2 --backend genesis --rollout-steps 128 --skip-eval
-```
-
-## 评估命令
-
-`scripts/eval.py` 使用与训练相同的环境工厂，因此传入 Genesis 实验配置时会创建 Genesis 后端；传入 PyFlyt 配置时会创建 PyFlyt 后端。
-
-**Genesis ex1**
-
-```bash
-python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml --seed 205 --train-seed 205 --episodes 20
-```
-
-**Genesis ex2**
+## 评估
 
 ```bash
 python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml --seed 205 --train-seed 205 --episodes 20
 ```
 
-**PyFlyt ex1 / ex2**
+结构指标后处理：`python scripts/pursuit_episode_log_stats.py`（逃逸角、角色稳定性等）。
 
-```bash
-python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml --seed 205 --train-seed 205 --episodes 20
-python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml --seed 205 --train-seed 205 --episodes 20
-```
-
-如果 checkpoint 不在默认目录，可以显式指定：
-
-```bash
-python scripts/eval.py --config configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml --ckpt results/pursuit_evasion_dream_mappo_3v1_ex2_genesis/checkpoints/205/best.pt
-```
-
-## 日志和 Checkpoint
-
-普通 `scripts/train.py` 训练默认输出到：
+## 日志与 Checkpoint
 
 ```text
 results/<train_config_stem>/
+  tb_/<seed>/
+  checkpoints/<seed>/latest.pt
+  checkpoints/<seed>/best.pt
 ```
 
-例如 Genesis ex2：
+## 关键配置（框架语义）
 
-```text
-results/pursuit_evasion_dream_mappo_3v1_ex2_genesis/
-  tb_/205/
-  checkpoints/205/
-    latest.pt
-    best.pt
-```
+| 语义 | 配置文件 |
+|------|----------|
+| 执行后端超参 | `configs/algo/dream_mappo.yaml`, `configs/algo/mappo.yaml` |
+| 流形 + 角色条件策略头 | `configs/model/dream_mappo_centralized.yaml` |
+| E1.1 完整框架 | `configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml` |
+| MAPPO 基线 | `configs/experiment/e1_1_open_space_pyflyt_mappo.yaml` |
+| 残差微调 | `configs/experiment/e1_1_open_space_pyflyt_mappo_bc.yaml` |
 
-其中：
-
-- TensorBoard 日志：`results/<run>/tb_/<seed>/`
-- checkpoint：`results/<run>/checkpoints/<seed>/`
-- `best.pt`：按 `train/avg_return` 保存的最佳模型。
-- `latest.pt`：最近一次保存的模型。
-
-Guarded 训练默认输出到：
-
-```text
-results/guarded_dream_mappo_runs/<config_stem>_<timestamp>/
-```
-
-目录内包含：
-
-```text
-train_stdout.log
-train_monitor_summary.json
-run_summary.json
-eval_stdout.log              # 未使用 --skip-eval 时生成
-tb_/<seed>/
-checkpoints/<seed>/
-```
+推荐在实验 YAML 注释中使用的标签：`framework: structure_preserving_encirclement`, `execution_backend: mappo`, `manifold: closed_curve`, `role_allocator: nearest`（或未来的 `entropic_ot`）。
 
 ## Smoke Test
-
-Genesis 未安装时，Genesis smoke test 会 skip。
 
 ```bash
 python scripts/smoke_test_genesis_3v1.py
 pytest tests/test_genesis_backend_smoke.py -q
 ```
 
-旧 PyFlyt 路径不会因为 Genesis 未安装而失败。训练 Genesis 前请先确认本机 Genesis 可用，并按你的机器情况设置 `configs/env/genesis_3v1.yaml` 中的：
+## 文档
 
-- `backend_config.device: gpu | cpu`
-- `backend_config.headless: true | false`
-- `backend_config.dt`
-- `backend_config.low_level_control: set_pos`
+- [`docs/FRAMEWORK.md`](docs/FRAMEWORK.md) — 框架叙事与命名对照
+- [`docs/paper/`](docs/paper/) — 摘要、方法、实验大纲（Markdown 草稿）
 
 ## 常见问题
 
-**Genesis 初始化时出现 UnicodeEncodeError / 乱码，且 TensorBoard 目录为空**
+**Genesis 在 Windows 上出现 UnicodeEncodeError**
 
-这是 Windows 子进程 stdout/stderr 使用 GBK 编码导致的，Genesis banner 中的 Unicode 字符会触发日志写入失败。当前训练入口已经强制设置 UTF-8：
-
-- `scripts/train.py`
-- `scripts/eval.py`
-- `scripts/guarded_dream_mappo.py`
-- `scripts/smoke_test_genesis_3v1.py`
-
-请重新运行训练命令。旧的失败 run 目录不会自动补写 TensorBoard event；新的 run 会在环境创建前写入 `run/alive`，路径仍为：
-
-```text
-results/guarded_dream_mappo_runs/<config_stem>_<timestamp>/tb_/<seed>/
-```
-
-## 关键配置文件
-
-- `configs/env/genesis_3v1.yaml`：Genesis DroneEntity 后端、`set_pos` 控制、动作范围。
-- `configs/env/pyflyt_3v1.yaml`：PyFlyt 兼容后端、动作范围、渲染/频率设置。
-- `configs/algo/dream_mappo.yaml`：Dream-MAPPO 的 PPO/MAPPO 训练超参。
-- `configs/model/dream_mappo_centralized.yaml`：Dream-MAPPO actor/critic 网络与几何动作头参数。
-- `configs/experiment/pursuit_evasion_dream_mappo_3v1_genesis.yaml`：Genesis ex1。
-- `configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml`：Genesis ex2。
-- `configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml`：PyFlyt ex1。
-- `configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml`：PyFlyt ex2。
+训练入口已强制 UTF-8：`scripts/train.py`, `scripts/eval.py`, `scripts/guarded_dream_mappo.py`。失败 run 的 TensorBoard 需重新训练生成。

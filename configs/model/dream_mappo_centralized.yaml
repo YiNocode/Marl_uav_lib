@@ -1,7 +1,7 @@
-# Dream-MAPPO centralized-critic policy.
+# SCE framework policy head (legacy type name: dream_mappo_centralized_critic).
 #
-# Actor uses local observation plus manifold-inspired action heads.
-# Critic uses the global state produced by the pursuit task.
+# Actor: local obs + role-conditioned manifold residuals.
+# Critic: global pursuit state. Training uses standard MAPPO backend (dream_mappo.yaml).
 
 type: dream_mappo_centralized_critic
 

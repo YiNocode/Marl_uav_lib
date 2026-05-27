@@ -11,6 +11,8 @@ from marl_uav.buffers.vec_rollout_buffer import VecRolloutBuffer
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
 from marl_uav.utils.mappo_finetune import (
+    apply_capture_adaptive_bc_kl,
+    apply_learner_finetune_epoch,
     deterministic_rollout_for_epoch,
     entropy_coef_for_epoch,
 )
@@ -417,8 +419,17 @@ class VecEnvTrainer(BaseRunner):
             if default_entropy_coef is not None
             else float(getattr(self.learner, "entropy_coef", 0.0))
         )
+        last_capture_rate: float | None = None
+        peak_capture_rate = 0.0
 
         for epoch in range(num_epochs):
+            apply_learner_finetune_epoch(self.learner, finetune, epoch)
+            apply_capture_adaptive_bc_kl(
+                self.learner,
+                finetune,
+                rolling_capture=last_capture_rate,
+                peak_capture=peak_capture_rate,
+            )
             det_rollout = deterministic_rollout_for_epoch(finetune, epoch)
             if hasattr(self.policy, "set_test_mode"):
                 self.policy.set_test_mode(det_rollout)
@@ -526,11 +537,14 @@ class VecEnvTrainer(BaseRunner):
             total_env_steps += rollout_steps * num_envs
             all_episode_returns.extend(epoch_returns)
             all_episode_lens.extend(epoch_lens)
+            epoch_debug = self._episode_debug_counts(epoch_train_metrics)
+            last_capture_rate = float(epoch_debug["train_capture_rate"])
+            peak_capture_rate = max(peak_capture_rate, last_capture_rate)
 
             if log_interval > 0 and (epoch + 1) % log_interval == 0:
                 avg_ret = float(np.mean(epoch_returns)) if epoch_returns else 0.0
                 avg_len = float(np.mean(epoch_lens)) if epoch_lens else 0.0
-                debug_counts = self._episode_debug_counts(epoch_train_metrics)
+                debug_counts = epoch_debug
                 msg = (
                     f"[vec-train] epoch={epoch+1}/{num_epochs} "
                     f"num_envs={num_envs} steps={rollout_steps * num_envs} "

@@ -1,11 +1,11 @@
-﻿# E1.1 main benchmark, open-space / obstacle-free, PyFlyt.
-# Method: reward-shaped MAPPO baseline.
+﻿# E1.1 ablation: MAPPO backend + structure rewards only (no deformable manifold policy head).
+# Compares against full SCE instance (dream_mappo_full).
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
   method: reward_shaped_mappo
-  description: MAPPO with ex1 structure observations plus structure/radial reward shaping; no DREAM manifold policy.
+  description: Vanilla MAPPO backend with ex1 structure observations and reward shaping; no closed-curve manifold policy head (E5 ablation comparator).
 
 env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
 algo: configs/algo/mappo.yaml

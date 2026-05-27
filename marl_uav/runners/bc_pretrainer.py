@@ -187,6 +187,9 @@ def run_bc_warmstart(
     if skipped_training:
         print(f"[bc] skip existing checkpoint: {ckpt_path}")
         load_bc_policy_weights(policy, ckpt_path)
+        log_std_after = bc_cfg.get("log_std_after_bc")
+        if log_std_after is not None:
+            set_policy_log_std(policy, float(log_std_after))
         expert_name = str(bc_cfg.get("expert", "fixed_ring"))
         expert_params = dict(bc_cfg.get(expert_name) or bc_cfg.get("expert_params") or {})
         expert_get_actions = make_expert_get_actions_fn(env, expert_name, expert_params)
@@ -294,6 +297,11 @@ def run_bc_warmstart(
             msg = " ".join(f"{k}={v:.4f}" for k, v in sorted(epoch_metrics.items()))
             print(f"[bc] epoch={epoch + 1}/{num_epochs} {msg}")
 
+    log_std_after = bc_cfg.get("log_std_after_bc")
+    if log_std_after is not None:
+        set_policy_log_std(policy, float(log_std_after))
+        print(f"[bc] set policy log_std to {float(log_std_after)}")
+
     save_payload = {
         "epoch": num_epochs - 1,
         "global_step": global_step,
@@ -304,11 +312,6 @@ def run_bc_warmstart(
     }
     torch.save(save_payload, ckpt_path)
     print(f"[bc] saved warm-start checkpoint: {ckpt_path}")
-
-    log_std_after = bc_cfg.get("log_std_after_bc")
-    if log_std_after is not None:
-        set_policy_log_std(policy, float(log_std_after))
-        print(f"[bc] set policy log_std to {float(log_std_after)}")
 
     eval_episodes = int(bc_cfg.get("eval_episodes", 20))
     eval_metrics = evaluate_bc_clone(
@@ -342,11 +345,37 @@ def run_bc_warmstart(
     return ckpt_path
 
 
-def load_bc_policy_weights(policy: Any, ckpt_path: Path) -> dict[str, Any]:
-    """Load actor weights from a BC checkpoint into ``policy``."""
+def _actor_state_prefixes() -> tuple[str, ...]:
+    return ("actor_encoder.", "policy_head.", "actor_head.", "dream_actor_head.")
+
+
+def filter_actor_state_dict(policy_state: dict[str, Any]) -> dict[str, Any]:
+    """Keep only actor submodule weights from a full policy state dict."""
+    prefixes = _actor_state_prefixes()
+    return {k: v for k, v in policy_state.items() if k.startswith(prefixes)}
+
+
+def load_bc_policy_weights(
+    policy: Any,
+    ckpt_path: Path,
+    *,
+    actor_only: bool = True,
+) -> dict[str, Any]:
+    """Load BC checkpoint into ``policy`` (actor-only by default; critic stays MAPPO-init)."""
     data = torch.load(ckpt_path, map_location="cpu")
     policy_state = data.get("policy")
     if policy_state is None:
         raise ValueError(f"BC checkpoint missing 'policy' key: {ckpt_path}")
-    policy.load_state_dict(policy_state)
+    if actor_only:
+        actor_state = filter_actor_state_dict(policy_state)
+        if not actor_state:
+            raise ValueError(f"BC checkpoint has no actor keys: {ckpt_path}")
+        incompatible = policy.load_state_dict(actor_state, strict=False)
+        unexpected = getattr(incompatible, "unexpected_keys", None)
+        if unexpected is None and isinstance(incompatible, (tuple, list)) and len(incompatible) == 2:
+            unexpected = incompatible[1]
+        if unexpected:
+            raise ValueError(f"Unexpected keys when loading BC actor: {list(unexpected)[:5]}")
+    else:
+        policy.load_state_dict(policy_state)
     return data
