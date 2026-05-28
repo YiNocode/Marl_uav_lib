@@ -7,7 +7,7 @@ benchmark:
   method: pure_pursuit
   description: Non-learning baseline where every pursuer directly chases the evader.
 
-env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
+env: configs/env/e1_1_pyflyt_3v1_open_space_heuristic.yaml
 train_results_dir: results/e1_1_open_space_pyflyt/training/pure_pursuit
 
 task:
@@ -17,8 +17,9 @@ task:
   z_max: 5.0
   capture_dist: 1.0
   episode_limit: 1000
-  pursuer_speed: 0.15
+  pursuer_speed: 0.25
   evader_speed: 0.2
+  pursuer_vertical_speed: 0.30
   min_pursuer_sep: 0.6
   progress_reward_scale: 0.0
   min_progress_reward_scale: 0.0
@@ -31,6 +32,9 @@ task:
   capture_bonus_team: 0.0
   capture_bonus_individual: 0.0
   progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
 
   structure_reward_scale: 0.0
   structure_improve_scale: 0.0
@@ -43,6 +47,8 @@ task:
 pure_pursuit:
   xy_gain: 0.25
   z_gain: 0.20
+  yaw_gain: 0.25
+  yaw_align_min_speed: 0.25
 
 seed: 101
 eval_episodes: 200

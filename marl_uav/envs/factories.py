@@ -25,6 +25,7 @@ def build_pursuit_task_from_config(
     )
 
     task_params = dict(task_cfg or {})
+    task_params.pop("debug_browser", None)
     task_name = str(task_params.pop("name", default_name))
     if task_name == "pursuit_evasion_3v1":
         return PursuitEvasion3v1Task(**task_params) if task_params else PursuitEvasion3v1Task()

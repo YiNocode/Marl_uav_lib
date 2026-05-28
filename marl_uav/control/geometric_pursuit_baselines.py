@@ -18,6 +18,34 @@ def _clip_actions(actions: np.ndarray, action_low: np.ndarray, action_high: np.n
     return np.clip(np.asarray(actions, dtype=np.float32), low[None, :], high[None, :]).astype(np.float32)
 
 
+def _wrap_to_pi(angles: np.ndarray) -> np.ndarray:
+    ang = np.asarray(angles, dtype=np.float32)
+    return np.arctan2(np.sin(ang), np.cos(ang)).astype(np.float32)
+
+
+def pursuer_yaws_from_backend(backend_state: Any, pursuer_ids: np.ndarray) -> np.ndarray:
+    """Read pursuer yaw (rad) from PyFlyt ang_pos channel."""
+    ang_pos = np.asarray(backend_state.states[:, 1, :], dtype=np.float32)
+    pids = np.asarray(pursuer_ids, dtype=np.int64).reshape(-1)
+    return ang_pos[pids, 2].copy()
+
+
+def default_proportional_gains(
+    action_low: np.ndarray,
+    action_high: np.ndarray,
+    *,
+    xy_gain: float | None,
+    z_gain: float | None,
+    yaw_gain: float | None,
+) -> tuple[float, float, float]:
+    """Default heuristic gains to env action bounds (unit error -> saturated command)."""
+    high = np.asarray(action_high, dtype=np.float32).reshape(-1)
+    xy = float(xy_gain) if xy_gain is not None else float(high[0])
+    zg = float(z_gain) if z_gain is not None else (float(high[3]) if high.shape[0] >= 4 else 0.20)
+    yg = float(yaw_gain) if yaw_gain is not None else (float(high[2]) if high.shape[0] >= 3 else 0.0)
+    return xy, zg, yg
+
+
 def proportional_actions_to_targets(
     pursuer_pos: np.ndarray,
     target_pos: np.ndarray,
@@ -26,19 +54,47 @@ def proportional_actions_to_targets(
     *,
     xy_gain: float,
     z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
 ) -> np.ndarray:
-    """Map pursuer-to-target position error to [vx, vy, yaw_rate, vz] actions."""
+    """Map pursuer-to-target position error to [vx, vy, yaw_rate, vz] actions.
+
+    When ``yaw_gain > 0`` and ``pursuer_yaw`` is provided, uses bearing-aligned
+    horizontal speed plus proportional yaw tracking. Otherwise falls back to
+    decoupled xy P-control with zero yaw (legacy RL action-box semantics).
+    """
     p = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
     g = np.asarray(target_pos, dtype=np.float32).reshape(3, 3)
+    low = np.asarray(action_low, dtype=np.float32).reshape(-1)
+    high = np.asarray(action_high, dtype=np.float32).reshape(-1)
     out = _empty_actions(action_low)
     err = g - p
-    out[:, 0] = float(xy_gain) * err[:, 0]
-    out[:, 1] = float(xy_gain) * err[:, 1]
-    if out.shape[1] >= 3:
-        out[:, 2] = 0.0
+
+    use_yaw_align = pursuer_yaw is not None and float(yaw_gain) > 0.0
+    if use_yaw_align:
+        yaw = np.asarray(pursuer_yaw, dtype=np.float32).reshape(3)
+        dx = err[:, 0]
+        dy = err[:, 1]
+        bearings = np.arctan2(dy, dx).astype(np.float32)
+        yaw_err = _wrap_to_pi(bearings - yaw)
+        out[:, 2] = float(yaw_gain) * yaw_err
+
+        dist_xy = np.hypot(dx, dy).astype(np.float32)
+        align = np.cos(yaw_err)
+        align = np.clip(align, float(yaw_align_min_speed), 1.0).astype(np.float32)
+        speed_cmd = np.minimum(float(xy_gain) * dist_xy * align, float(high[0])).astype(np.float32)
+        out[:, 0] = speed_cmd * np.cos(bearings)
+        out[:, 1] = speed_cmd * np.sin(bearings)
+    else:
+        out[:, 0] = float(xy_gain) * err[:, 0]
+        out[:, 1] = float(xy_gain) * err[:, 1]
+        if out.shape[1] >= 3:
+            out[:, 2] = 0.0
+
     if out.shape[1] >= 4:
         out[:, 3] = float(z_gain) * err[:, 2]
-    return _clip_actions(out, action_low, action_high)
+    return _clip_actions(out, low, high)
 
 
 def pure_pursuit_actions_from_state(
@@ -50,6 +106,9 @@ def pure_pursuit_actions_from_state(
     *,
     xy_gain: float,
     z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
 ) -> np.ndarray:
     """Pure pursuit: each pursuer directly moves toward the evader."""
     pos = np.asarray(lin_pos, dtype=np.float32)
@@ -63,6 +122,9 @@ def pure_pursuit_actions_from_state(
         action_high,
         xy_gain=xy_gain,
         z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
     )
 
 
@@ -74,6 +136,9 @@ def oracle_slot_actions_from_state(
     *,
     xy_gain: float,
     z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
 ) -> np.ndarray:
     """Oracle slot controller: move directly toward the task's assigned slot targets."""
     pos = np.asarray(lin_pos, dtype=np.float32)
@@ -98,26 +163,36 @@ def oracle_slot_actions_from_state(
         action_high,
         xy_gain=xy_gain,
         z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
     )
 
 
 def make_pure_pursuit_get_actions_fn(
     env: Any,
     *,
-    xy_gain: float = 0.25,
-    z_gain: float = 0.20,
+    xy_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
 ):
     """Build a RolloutWorker ``get_actions_fn`` for pure pursuit."""
     if getattr(env, "_action_space_type", "") != "continuous":
         raise ValueError("pure-pursuit baseline requires a continuous action-space env")
     low = np.asarray(env.action_low_np, dtype=np.float32)
     high = np.asarray(env.action_high_np, dtype=np.float32)
+    xy_gain, z_gain, yaw_gain = default_proportional_gains(
+        low, high, xy_gain=xy_gain, z_gain=z_gain, yaw_gain=yaw_gain
+    )
 
     def get_actions(obs_list: Any, state: Any, avail_actions: Any) -> np.ndarray:
         del obs_list, state, avail_actions
         if env.prev_backend_state is None or env.task_state is None:
             raise RuntimeError("Environment must be reset before selecting pure-pursuit actions.")
-        lin_pos = np.asarray(env.prev_backend_state.states[:, 3, :], dtype=np.float32)
+        backend = env.prev_backend_state
+        lin_pos = np.asarray(backend.states[:, 3, :], dtype=np.float32)
+        yaws = pursuer_yaws_from_backend(backend, env.task_state.pursuer_ids)
         return pure_pursuit_actions_from_state(
             lin_pos,
             env.task_state.pursuer_ids,
@@ -126,6 +201,9 @@ def make_pure_pursuit_get_actions_fn(
             high,
             xy_gain=xy_gain,
             z_gain=z_gain,
+            pursuer_yaw=yaws,
+            yaw_gain=yaw_gain,
+            yaw_align_min_speed=yaw_align_min_speed,
         )
 
     return get_actions
@@ -134,20 +212,27 @@ def make_pure_pursuit_get_actions_fn(
 def make_oracle_slot_get_actions_fn(
     env: Any,
     *,
-    xy_gain: float = 0.25,
-    z_gain: float = 0.20,
+    xy_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
 ):
     """Build a RolloutWorker ``get_actions_fn`` for the oracle slot controller."""
     if getattr(env, "_action_space_type", "") != "continuous":
         raise ValueError("oracle-slot baseline requires a continuous action-space env")
     low = np.asarray(env.action_low_np, dtype=np.float32)
     high = np.asarray(env.action_high_np, dtype=np.float32)
+    xy_gain, z_gain, yaw_gain = default_proportional_gains(
+        low, high, xy_gain=xy_gain, z_gain=z_gain, yaw_gain=yaw_gain
+    )
 
     def get_actions(obs_list: Any, state: Any, avail_actions: Any) -> np.ndarray:
         del obs_list, state, avail_actions
         if env.prev_backend_state is None or env.task_state is None:
             raise RuntimeError("Environment must be reset before selecting oracle-slot actions.")
-        lin_pos = np.asarray(env.prev_backend_state.states[:, 3, :], dtype=np.float32)
+        backend = env.prev_backend_state
+        lin_pos = np.asarray(backend.states[:, 3, :], dtype=np.float32)
+        yaws = pursuer_yaws_from_backend(backend, env.task_state.pursuer_ids)
         return oracle_slot_actions_from_state(
             env,
             lin_pos,
@@ -155,7 +240,9 @@ def make_oracle_slot_get_actions_fn(
             high,
             xy_gain=xy_gain,
             z_gain=z_gain,
+            pursuer_yaw=yaws,
+            yaw_gain=yaw_gain,
+            yaw_align_min_speed=yaw_align_min_speed,
         )
 
     return get_actions
-

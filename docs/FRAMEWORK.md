@@ -22,14 +22,14 @@ Evader state + environment context
 | SCE framework | `framework: structure_preserving_encirclement` (config comments) |
 | Full framework instance on E1.1 | `dream_mappo_full` method key, `configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml` |
 | Deformable manifold | `manifold_targets_from_pursuit_state`, task `_reference_manifold_*`, Dream actor heads |
-| Role allocation | `role_assignment_mode` in `pursuit_evasion_3v1_ex1`; **implemented:** `nearest` (3×3 assignment via permutation + inertia), `fixed` |
+| Role allocation | `role_assignment_mode`: `entropic_ot` (Sinkhorn + hard match), `nearest` (permutation + inertia), `fixed` |
 | Structural costs | `structure_*` rewards & metrics `C_cov`, `C_col`, `D_ang`, `phi_max` (escape gap) |
 | Execution backend | `algo: dream_mappo` or `algo: mappo` → `MAPPOLearner` / centralized critic PPO |
 | Residual skill-preserving fine-tune | `mappo_bc`, `mappo_bc_finetune.yaml`, `marl_uav/utils/mappo_finetune.py` |
 
 ## Implementation status (honest)
 
-- **Entropic OT / Sinkhorn:** described in `docs/paper/02_method.md` as the target formulation; **not** implemented in `pursuit_evasion_3v1_task_ex1.py` as of this snapshot (nearest-permutation assignment instead). See `docs/paper/TODO.md`.
+- **Entropic OT / Sinkhorn:** implemented for `entropic_ot` mode; E1.1 method `sce` uses proportional execution backend. MAPPO backend remains on `dream_mappo_full`.
 - **Formal closure guarantees:** not claimed in paper drafts.
 - **Runtime scaling claims:** require profiling (TODO).
 

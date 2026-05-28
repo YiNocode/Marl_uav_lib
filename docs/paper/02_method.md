@@ -20,8 +20,8 @@
 
 - **Slots:** three (for 3v1) target points sampled on \(M_t\) at fixed angular spacing with deformable radius.
 - **Cost matrix** \(C_{ij}\): pursuer \(i\) to slot \(j\) (Euclidean distance in implementation).
-- **Target (paper):** entropic OT with temperature \(\varepsilon\), Sinkhorn iterations \(K\) — soft assignment **TODO: implement / document \(K,\varepsilon\)**.
-- **Current implementation:** exact permutation search for \(N{=}3\) with **assignment inertia** (`assignment_inertia_margin`) — document as engineering baseline, not OT, until migrated.
+- **Entropic OT (E1.1 SCE):** `role_assignment_mode: entropic_ot` in `pursuit_evasion_3v1_ex1`; Sinkhorn plan in `marl_uav/framework/role_allocation.py` with hard matching on the transport plan; hyperparameters `ot_epsilon`, `ot_epsilon_scale`, `ot_sinkhorn_iterations`.
+- **Legacy nearest mode:** exact permutation search for \(N{=}3\) with **assignment inertia** — still used by `oracle_slot` and `dream_mappo_full` configs until migrated.
 
 ## 3.4 Topology-Aware Structural Guidance
 

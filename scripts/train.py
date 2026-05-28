@@ -35,6 +35,7 @@ from marl_uav.runners.trainer import Trainer
 from marl_uav.runners.vecenv_trainer import VecEnvTrainer
 from marl_uav.utils.checkpoint import CheckpointManager
 from marl_uav.utils.config import load_config
+from marl_uav.utils.e1_1_suite import merge_rl_task_speed
 from marl_uav.utils.device import resolve_train_device
 from marl_uav.utils.mp_context import default_vec_env_context
 from marl_uav.utils.torch_threading import configure_torch_threads
@@ -280,7 +281,7 @@ def build_learner(algo_cfg_path: Path, policy: Any) -> tuple[Any, dict[str, Any]
 def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parents[1]
-    train_cfg = load_config(root / args.train_config)
+    train_cfg = merge_rl_task_speed(load_config(root / args.train_config))
 
     env_cfg_path = root / train_cfg.get("env", "configs/env/toy_uav.yaml")
     algo_cfg_path = root / train_cfg.get("algo", "configs/algo/ippo.yaml")

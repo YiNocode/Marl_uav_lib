@@ -21,8 +21,7 @@ task:
   z_max: 5.0
   capture_dist: 1.0
   episode_limit: 1000
-  pursuer_speed: 0.15
-  evader_speed: 0.10
+  # pursuer_speed / evader_speed: see configs/benchmark/e1_1_open_space_suite.yaml → methods.mappo_bc_improve.task_speed
   min_pursuer_sep: 0.6
   progress_reward_scale: 1.0
   min_progress_reward_scale: 0.5
@@ -34,9 +33,6 @@ task:
   capture_bonus_team: 200.0
   capture_bonus_individual: 50.0
   progress_dist_norm: 2.0
-  continuous_action_xy_ref: 0.25
-  continuous_action_yaw_ref: 0.01
-  continuous_action_z_ref: 0.15
   structure_reward_scale: 0.0
   structure_improve_scale: 0.0
   structure_hold_reward_scale: 0.0

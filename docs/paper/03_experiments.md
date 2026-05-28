@@ -7,7 +7,8 @@
 - **Purpose:** Show the framework does not destroy simple capture ability.
 - **Repo mapping:** `configs/benchmark/e1_1_open_space_suite.yaml`, scenario `e1_1_open_space`.
 - **Methods:**
-  - Framework (full): `dream_mappo_full`
+  - **SCE (core, no RL):** `sce` — deformable manifold + entropic OT + proportional execution (`configs/experiment/e1_1_open_space_pyflyt_sce.yaml`)
+  - Framework + MAPPO backend (later): `dream_mappo_full`
   - RL backends / baselines: `mappo`, `reward_shaped_mappo`, `mappo_bc`, `mappo_bc_improve`
   - Heuristics: `pure_pursuit`, `fixed_ring`, `oracle_slot`
 - **Runner:** `python scripts/benchmark_e1_1_open_space.py --mode all`

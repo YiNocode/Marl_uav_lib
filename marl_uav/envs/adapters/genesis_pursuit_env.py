@@ -115,6 +115,7 @@ class GenesisPursuitEvasionEnv(BaseEnv):
 
         info = {"state": state}
         info.update(self._pursuit_info(backend_state, terminated=False, truncated=False, prev_captured=False))
+        self._maybe_publish_debug_frame(info, event="reset")
         return {"obs": obs, "state": state}, info
 
     def step(self, actions):
@@ -171,7 +172,16 @@ class GenesisPursuitEvasionEnv(BaseEnv):
         }
 
         self.prev_backend_state = backend_state
+        self._maybe_publish_debug_frame(info, event="step")
         return {"obs": obs, "state": state}, rewards.tolist(), bool(terminated), bool(truncated), info
+
+    def _maybe_publish_debug_frame(self, info: dict, *, event: str) -> None:
+        try:
+            from marl_uav.utils.debug_browser import publish_env_frame
+
+            publish_env_frame(self, info, event=event)
+        except Exception:
+            pass
 
     def get_obs(self):
         """Return latest per-agent observations."""

@@ -108,6 +108,21 @@ def test_e1_1_reward_shaped_mappo_has_structure_inputs_and_rewards_only() -> Non
         _assert_no_residual_controller(task)
 
 
+def test_e1_1_sce_is_heuristic_with_ot_and_manifold() -> None:
+    for path in _method_config_paths("sce"):
+        cfg = _load(path.relative_to(ROOT))
+        task = _task(cfg)
+        assert cfg["benchmark"]["method"] == "sce"
+        assert "algo" not in cfg
+        assert "sce" in cfg
+        assert task["name"] == "pursuit_evasion_3v1_ex1"
+        assert task["role_assignment_mode"] == "entropic_ot"
+        assert int(task["ot_sinkhorn_iterations"]) >= 1
+        assert float(task["manifold_target_radius_scale"]) > 0.0
+        assert float(task["manifold_contraction_rate"]) >= 0.0
+        _assert_no_residual_controller(task)
+
+
 def test_e1_1_dream_mappo_full_has_manifold_policy_and_role_assignment() -> None:
     for path in _method_config_paths("dream_mappo_full"):
         cfg = _load(path.relative_to(ROOT))

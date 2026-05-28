@@ -1,14 +1,18 @@
-# E1.1 main benchmark, open-space / obstacle-free, PyFlyt.
-# Method: oracle slot geometric controller.
+# E1.1 SCE framework (core geometry + roles), minimal execution backend.
+#
+# framework: structure_preserving_encirclement
+# manifold: closed_curve (deformable, contraction-gated)
+# role_allocator: entropic_ot
+# execution_backend: proportional_slot  (switch to mappo after core validation)
 
 benchmark:
   suite: E1
   scenario: e1_1_open_space
-  method: oracle_slot
-  description: Non-learning controller that moves directly toward the full-method slot targets.
+  method: sce
+  description: SCE with deformable encirclement manifold, entropic OT role allocation, and proportional slot-tracking execution (no MAPPO).
 
 env: configs/env/e1_1_pyflyt_3v1_open_space_heuristic.yaml
-train_results_dir: results/e1_1_open_space_pyflyt/training/oracle_slot
+train_results_dir: results/e1_1_open_space_pyflyt/training/sce
 
 task:
   name: pursuit_evasion_3v1_ex1
@@ -49,14 +53,26 @@ task:
   encirclement_capture_min_dist_scale: 1.5
   encirclement_capture_radius_margin_scale: 0.35
 
-  role_assignment_mode: nearest
+  role_features_enabled: false
+  role_assignment_mode: entropic_ot
+  ot_epsilon: 0.05
+  ot_epsilon_scale: 0.25
+  ot_sinkhorn_iterations: 25
   manifold_target_phase: 0.0
   manifold_target_radius_scale: 1.0
   manifold_contraction_rate: 0.01
   manifold_structure_gate_scale: 0.75
   assignment_inertia_margin: 0.05
 
-oracle_slot:
+  debug: true
+  debug_browser:
+    enabled: true
+    host: 127.0.0.1
+    port: 8765
+    open_browser: true
+    playback_speed: 0.25
+
+sce:
   xy_gain: 0.25
   z_gain: 0.20
   yaw_gain: 0.25

@@ -59,7 +59,17 @@ python scripts/benchmark_e1_1_open_space.py --mode all
 python scripts/benchmark_e1_1_open_space.py --mode eval --methods dream_mappo_full mappo
 ```
 
-方法键见 `configs/benchmark/e1_1_open_space_suite.yaml`（含 `mappo`、`dream_mappo_full`、`mappo_bc`、启发式基线等）。结果目录：`results/e1_1_open_space_pyflyt/`。
+方法键见 `configs/benchmark/e1_1_open_space_suite.yaml`：
+
+- **`sce`**（推荐先跑）：可变形流形 + 熵正则 OT 角色分配 + 比例槽位跟踪（最简执行后端，无需训练）
+- **`dream_mappo_full`**：同上几何/角色栈 + MAPPO 执行后端（需训练）
+- 对照：`mappo`、`mappo_bc`、启发式基线等
+
+```bash
+python scripts/benchmark_e1_1_open_space.py --mode eval --methods sce oracle_slot mappo
+```
+
+结果目录：`results/e1_1_open_space_pyflyt/`。
 
 ## 训练命令（单实验）
 

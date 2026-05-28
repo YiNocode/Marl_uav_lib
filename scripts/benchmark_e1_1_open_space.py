@@ -34,10 +34,12 @@ from marl_uav.control.geometric_pursuit_baselines import (
     make_oracle_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
+from marl_uav.control.sce_controller import make_sce_get_actions_fn
 from marl_uav.envs.factories import build_env_from_config
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.utils.checkpoint import load_checkpoint
 from marl_uav.utils.config import load_config
+from marl_uav.utils.e1_1_suite import merge_rl_task_speed
 
 
 def _load_eval_helpers():
@@ -91,7 +93,7 @@ def generate_train_configs(
         if not bool(meta.get("train", False)):
             continue
         base_path = ROOT / str(meta["config"])
-        cfg = load_config(base_path)
+        cfg = merge_rl_task_speed(load_config(base_path), suite=suite)
         for seed in seeds:
             out = generated_config_path(suite, method, seed)
             if out.exists() and not overwrite:
@@ -305,7 +307,7 @@ def _build_rl_worker(
     *,
     checkpoint_name: str | None = None,
 ) -> RolloutWorker:
-    cfg = load_config(cfg_path)
+    cfg = merge_rl_task_speed(load_config(cfg_path))
     env_cfg_path = ROOT / str(cfg["env"])
     algo_cfg_path = ROOT / str(cfg["algo"])
     model_cfg_path = ROOT / str(cfg["model"])
@@ -342,7 +344,7 @@ def _build_rl_worker(
 
 
 def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
-    cfg = load_config(cfg_path)
+    cfg = merge_rl_task_speed(load_config(cfg_path))
     env = build_env_from_config(ROOT / str(cfg["env"]), seed=seed, task_cfg=cfg.get("task", {}))
     if getattr(env, "obs_dim", None) is None or getattr(env, "state_dim", None) is None:
         env.reset(seed=seed)
@@ -353,10 +355,12 @@ def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
         get_actions = make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
     elif "oracle_slot" in cfg:
         get_actions = make_oracle_slot_get_actions_fn(env, **dict(cfg.get("oracle_slot", {}) or {}))
+    elif "sce" in cfg:
+        get_actions = make_sce_get_actions_fn(env, **dict(cfg.get("sce", {}) or {}))
     else:
         raise ValueError(
             f"Heuristic config {cfg_path.relative_to(ROOT)} must define one of "
-            "fixed_ring, pure_pursuit, or oracle_slot."
+            "fixed_ring, pure_pursuit, oracle_slot, or sce."
         )
     return RolloutWorker(env=env, policy=object(), get_actions_fn=get_actions)
 

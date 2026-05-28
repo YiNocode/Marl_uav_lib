@@ -6,6 +6,12 @@ from typing import Any
 
 import numpy as np
 
+from marl_uav.control.geometric_pursuit_baselines import (
+    default_proportional_gains,
+    proportional_actions_to_targets,
+    pursuer_yaws_from_backend,
+)
+
 
 def fixed_ring_actions_from_state(
     lin_pos: np.ndarray,
@@ -19,6 +25,9 @@ def fixed_ring_actions_from_state(
     z_gain: float,
     phase: float = 0.0,
     assignment: str = "fixed",
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
 ) -> np.ndarray:
     """Return continuous [vx, vy, yaw_rate, vz] actions for a fixed ring.
 
@@ -29,9 +38,6 @@ def fixed_ring_actions_from_state(
     pos = np.asarray(lin_pos, dtype=np.float32)
     pids = np.asarray(pursuer_ids, dtype=np.int64).reshape(3)
     eid = int(evader_id)
-    low = np.asarray(action_low, dtype=np.float32).reshape(-1)
-    high = np.asarray(action_high, dtype=np.float32).reshape(-1)
-    adim = int(low.shape[0])
 
     evader = pos[eid]
     angles = float(phase) + np.arange(3, dtype=np.float32) * (2.0 * np.pi / 3.0)
@@ -51,23 +57,27 @@ def fixed_ring_actions_from_state(
     else:
         raise ValueError(f"Unsupported fixed-ring assignment={assignment!r}")
 
-    err = assigned_targets - pos[pids]
-    out = np.zeros((3, adim), dtype=np.float32)
-    out[:, 0] = float(approach_gain) * err[:, 0]
-    out[:, 1] = float(approach_gain) * err[:, 1]
-    if adim >= 3:
-        out[:, 2] = 0.0
-    if adim >= 4:
-        out[:, 3] = float(z_gain) * err[:, 2]
-    return np.clip(out, low[None, :], high[None, :]).astype(np.float32)
+    return proportional_actions_to_targets(
+        pos[pids],
+        assigned_targets,
+        action_low,
+        action_high,
+        xy_gain=approach_gain,
+        z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
 
 
 def make_fixed_ring_get_actions_fn(
     env: Any,
     *,
     ring_radius: float = 1.6,
-    approach_gain: float = 0.25,
-    z_gain: float = 0.20,
+    approach_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
     phase: float = 0.0,
     assignment: str = "fixed",
 ):
@@ -76,12 +86,17 @@ def make_fixed_ring_get_actions_fn(
         raise ValueError("fixed-ring baseline requires a continuous action-space env")
     low = np.asarray(env.action_low_np, dtype=np.float32)
     high = np.asarray(env.action_high_np, dtype=np.float32)
+    approach_gain, z_gain, yaw_gain = default_proportional_gains(
+        low, high, xy_gain=approach_gain, z_gain=z_gain, yaw_gain=yaw_gain
+    )
 
     def get_actions(obs_list: Any, state: Any, avail_actions: Any) -> np.ndarray:
         del obs_list, state, avail_actions
         if env.prev_backend_state is None or env.task_state is None:
             raise RuntimeError("Environment must be reset before selecting fixed-ring actions.")
-        lin_pos = np.asarray(env.prev_backend_state.states[:, 3, :], dtype=np.float32)
+        backend = env.prev_backend_state
+        lin_pos = np.asarray(backend.states[:, 3, :], dtype=np.float32)
+        yaws = pursuer_yaws_from_backend(backend, env.task_state.pursuer_ids)
         return fixed_ring_actions_from_state(
             lin_pos,
             env.task_state.pursuer_ids,
@@ -93,7 +108,9 @@ def make_fixed_ring_get_actions_fn(
             z_gain=z_gain,
             phase=phase,
             assignment=assignment,
+            pursuer_yaw=yaws,
+            yaw_gain=yaw_gain,
+            yaw_align_min_speed=yaw_align_min_speed,
         )
 
     return get_actions
-

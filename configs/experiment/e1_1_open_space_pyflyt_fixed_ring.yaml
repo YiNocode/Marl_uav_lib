@@ -7,7 +7,7 @@ benchmark:
   method: fixed_ring
   description: Non-learning fixed-ring encirclement controller.
 
-env: configs/env/e1_1_pyflyt_3v1_open_space.yaml
+env: configs/env/e1_1_pyflyt_3v1_open_space_heuristic.yaml
 train_results_dir: results/e1_1_open_space_pyflyt/training/fixed_ring
 
 task:
@@ -19,6 +19,7 @@ task:
   episode_limit: 1000
   pursuer_speed: 0.15
   evader_speed: 0.2
+  pursuer_vertical_speed: 0.30
   min_pursuer_sep: 0.6
   progress_reward_scale: 0.0
   min_progress_reward_scale: 0.0
@@ -31,6 +32,9 @@ task:
   capture_bonus_team: 0.0
   capture_bonus_individual: 0.0
   progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
 
   structure_reward_scale: 0.0
   structure_improve_scale: 0.0
@@ -44,6 +48,8 @@ fixed_ring:
   ring_radius: 1.6
   approach_gain: 0.25
   z_gain: 0.20
+  yaw_gain: 0.25
+  yaw_align_min_speed: 0.25
   phase: 0.0
   assignment: fixed
 

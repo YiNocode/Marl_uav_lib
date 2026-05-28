@@ -9,7 +9,9 @@
 
 ## Implementation gaps vs. paper story
 
-- [ ] **Entropic OT role allocator** (`role_allocator: entropic_ot`) — current: permutation + inertia in `pursuit_evasion_3v1_task_ex1.py`.
+- [x] **Entropic OT role allocator** — `marl_uav/framework/role_allocation.py`, task mode `entropic_ot`, E1.1 `sce` method.
+- [ ] Migrate `dream_mappo_full` from `nearest` to `entropic_ot` after SCE core validation.
+- [ ] Replace proportional execution with MAPPO backend on SCE stack.
 - [ ] E3 narrow-passage scenario configs + benchmark suite.
 - [ ] E4 multi-exit scenario configs + benchmark suite.
 - [ ] E2 unified benchmark runner (like `e1_1_open_space_suite.yaml`).

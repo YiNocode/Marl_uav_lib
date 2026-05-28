@@ -146,6 +146,7 @@ class PyFlytAviaryEnv(BaseEnv):
         ):
             info["obstacle_xy"] = np.asarray(self.task_state.obstacle_xy, dtype=np.float32).copy()
             info["obstacle_r"] = np.asarray(self.task_state.obstacle_r, dtype=np.float32).copy()
+        self._maybe_publish_debug_frame(info, event="reset")
         return {"obs": obs, "state": state}, info
 
     def step(self, actions):
@@ -382,7 +383,16 @@ class PyFlytAviaryEnv(BaseEnv):
         }
 
         self.prev_backend_state = backend_state
+        self._maybe_publish_debug_frame(info, event="step")
         return {"obs": obs, "state": state}, rewards.tolist(), terminated, truncated, info
+
+    def _maybe_publish_debug_frame(self, info: dict, *, event: str) -> None:
+        try:
+            from marl_uav.utils.debug_browser import publish_env_frame
+
+            publish_env_frame(self, info, event=event)
+        except Exception:
+            pass
 
     def get_obs(self):
         """兼容 BaseEnv 接口，返回最近一次 step/reset 的 obs 列表形式。"""

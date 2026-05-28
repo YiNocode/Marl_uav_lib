@@ -174,6 +174,21 @@ class RolloutWorker(BaseRunner):
         # 先 reset 环境，确保 env 已初始化好 obs_dim/state_dim 等属性
         obs_dict, env_info = self.env.reset(seed=seed)
 
+        from marl_uav.utils.debug_browser import get_debug_browser_hub, publish_episode_marker
+
+        hub = get_debug_browser_hub()
+        if hub is not None:
+            ep_idx = hub.next_episode()
+            total_eps = int(getattr(hub, "_total_episodes", 1))
+            publish_episode_marker(
+                "episode_start",
+                episode=ep_idx,
+                total_episodes=total_eps,
+                seed=seed,
+            )
+            if ep_idx == 1:
+                hub.wait_if_blocked()
+
         # ex2 圆柱：reset 时柱布局固定整局，供评估轨迹画图与日志
         obstacle_xy_snapshot = env_info.get("obstacle_xy")
         obstacle_r_snapshot = env_info.get("obstacle_r")
@@ -283,6 +298,20 @@ class RolloutWorker(BaseRunner):
 
             next_obs_list = next_obs_dict["obs"]
             next_state = next_obs_dict["state"]
+
+            debug_hub = get_debug_browser_hub()
+            if debug_hub is not None:
+                from marl_uav.utils.debug_browser import publish_env_frame
+
+                dream_step = self._maybe_extract_dream_manifold_snapshot(next_state)
+                if dream_step is not None:
+                    publish_env_frame(
+                        self.env,
+                        step_info,
+                        event="step",
+                        dream_manifold=dream_step,
+                    )
+                debug_hub.wait_after_step()
 
             if record_trajectory and getattr(self.env, "prev_backend_state", None) is not None:
                 traj_list.append(
@@ -427,6 +456,16 @@ class RolloutWorker(BaseRunner):
             self._logger.flush()
 
             self._episode_idx += 1
+
+        if hub is not None:
+            publish_episode_marker(
+                "episode_end",
+                episode=int(getattr(hub, "_episode_idx", 0)),
+                total_episodes=int(getattr(hub, "_total_episodes", 1)),
+                episode_return=float(info.get("episode_return", 0.0)),
+                episode_len=int(info.get("episode_len", 0)),
+                capture=bool(info.get("capture", False)),
+            )
 
         return buf, info
 

@@ -325,6 +325,9 @@ class PursuitEvasion3v1Task(BaseTask):
         structure_obs_include_deltas: bool = True,
         role_features_enabled: bool = True,
         role_assignment_mode: str = "nearest",
+        ot_epsilon: float = 0.05,
+        ot_epsilon_scale: float | None = 0.25,
+        ot_sinkhorn_iterations: int = 25,
         manifold_target_phase: float = 0.0,
         manifold_target_radius_scale: float = 1.0,
         manifold_target_rho_min: float | None = None,
@@ -455,11 +458,17 @@ class PursuitEvasion3v1Task(BaseTask):
         self.structure_obs_include_deltas = bool(structure_obs_include_deltas)
         self.role_features_enabled = bool(role_features_enabled)
         role_mode = str(role_assignment_mode).strip().lower()
-        if role_mode not in {"fixed", "nearest"}:
+        if role_mode not in {"fixed", "nearest", "entropic_ot"}:
             raise ValueError(
-                f"role_assignment_mode must be 'fixed' or 'nearest', got {role_assignment_mode!r}"
+                "role_assignment_mode must be 'fixed', 'nearest', or 'entropic_ot', "
+                f"got {role_assignment_mode!r}"
             )
         self.role_assignment_mode = role_mode
+        self.ot_epsilon = max(float(ot_epsilon), 1e-9)
+        self.ot_epsilon_scale = (
+            None if ot_epsilon_scale is None else max(float(ot_epsilon_scale), 0.0)
+        )
+        self.ot_sinkhorn_iterations = max(int(ot_sinkhorn_iterations), 1)
         self.manifold_target_phase = float(manifold_target_phase)
         self.manifold_target_radius_scale = max(float(manifold_target_radius_scale), 0.05)
         self.manifold_target_rho_min = (
@@ -958,7 +967,30 @@ class PursuitEvasion3v1Task(BaseTask):
         dist_mat = np.linalg.norm(
             pursuer_pos[:, None, :] - targets[None, :, :],
             axis=2,
-        )
+        ).astype(np.float64)
+
+        prev_assignment = None if task_state is None else getattr(task_state, "assigned_target_indices", None)
+
+        if self.role_assignment_mode == "entropic_ot":
+            from marl_uav.framework.role_allocation import (
+                default_ot_epsilon,
+                entropic_ot_assignment,
+            )
+
+            eps = default_ot_epsilon(
+                dist_mat,
+                self.ot_epsilon,
+                self.ot_epsilon_scale,
+            )
+            best_assignment = entropic_ot_assignment(
+                dist_mat,
+                epsilon=eps,
+                num_iters=self.ot_sinkhorn_iterations,
+                prev_assignment=prev_assignment,
+                inertia_margin=self.assignment_inertia_margin,
+            )
+            return targets, best_assignment
+
         best_perm = (0, 1, 2)
         best_cost = np.inf
         for perm in permutations(range(3)):
@@ -968,7 +1000,6 @@ class PursuitEvasion3v1Task(BaseTask):
                 best_perm = perm
         best_assignment = np.asarray(best_perm, dtype=np.int64)
 
-        prev_assignment = None if task_state is None else getattr(task_state, "assigned_target_indices", None)
         if prev_assignment is None:
             return targets, best_assignment
         prev_assignment = np.asarray(prev_assignment, dtype=np.int64).reshape(-1)

@@ -14,23 +14,53 @@ eval:
   episodes_per_seed: 200
   terminal_window: 30
 
+# Speed / action scaling for E1.1 (open-space PyFlyt).
+# - Heuristic methods: set task.pursuer_speed in each method experiment YAML (authoritative).
+# - RL methods: do NOT set task.pursuer_speed in experiment YAML; use methods.<name>.task_speed below.
+# Planar pursuer setpoint cap (m/s):
+#   min(action_high[0]/continuous_action_xy_ref, 1) * pursuer_speed * (world_xy / reference_world_xy)
+# Env action box: configs/env/e1_1_pyflyt_3v1_open_space.yaml
+speed:
+  reference_world_xy: 2.0
+  env_config: configs/env/e1_1_pyflyt_3v1_open_space.yaml
+  rl_defaults:
+    continuous_action_xy_ref: 0.25
+    continuous_action_yaw_ref: 0.01
+    continuous_action_z_ref: 0.15
+
 methods:
+  sce:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_sce.yaml
+    train: false
   mappo:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo.yaml
     train: true
+    task_speed:
+      pursuer_speed: 0.25
+      evader_speed: 0.08
   mappo_bc:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc.yaml
     train: true
+    task_speed:
+      pursuer_speed: 0.15
+      evader_speed: 0.2
   mappo_bc_improve:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc_improve.yaml
     train: true
+    task_speed:
+      pursuer_speed: 0.15
+      evader_speed: 0.10
   reward_shaped_mappo:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_reward_shaped_mappo.yaml
     train: true
+    task_speed:
+      pursuer_speed: 0.15
+      evader_speed: 0.20
   fixed_ring:
     kind: heuristic
     config: configs/experiment/e1_1_open_space_pyflyt_fixed_ring.yaml
@@ -47,3 +77,6 @@ methods:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml
     train: true
+    task_speed:
+      pursuer_speed: 0.15
+      evader_speed: 0.20

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MARL UAV Debug Viz</title>
+  <link rel="stylesheet" href="/assets/css/app.css" />
+</head>
+<body>
+  <header id="app-header"></header>
+  <main>
+    <aside id="sidebar"></aside>
+    <section id="canvas-section">
+      <div id="canvas-wrap">
+        <canvas id="view"></canvas>
+        <div id="overlay" class="hidden"></div>
+        <div id="view-hint">滚轮缩放 · 拖拽平移 · 双击适应视图</div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/assets/js/main.js"></script>
+</body>
+</html>
