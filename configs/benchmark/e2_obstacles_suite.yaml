@@ -1,0 +1,65 @@
+# E2 obstacle-rich benchmark suite (paper E2): PyFlyt 3v1 with cylindrical obstacles.
+# Compares geometric / slot heuristics and RL methods in the same obstacle field.
+
+suite: E2
+scenario: e2_obstacles
+backend: pyflyt
+result_root: results/e2_obstacles_pyflyt
+generated_config_dir: configs/generated/e2_obstacles
+
+seeds: [101, 102, 103, 104, 105]
+eval:
+  base_seed: 8010
+  episodes_per_seed: 200
+  terminal_window: 30
+
+# Speed / action scaling for E2 (obstacle-rich PyFlyt).
+# - Heuristic methods: set task.pursuer_speed in each method experiment YAML (authoritative).
+# - RL methods: use methods.<name>.task_speed below when absent from experiment YAML.
+speed:
+  reference_world_xy: 2.0
+  env_config: configs/env/e2_pyflyt_3v1_obstacles.yaml
+  rl_defaults:
+    continuous_action_xy_ref: 0.25
+    continuous_action_yaw_ref: 0.01
+    continuous_action_z_ref: 0.15
+
+methods:
+  sce:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_sce.yaml
+    train: false
+  pure_pursuit:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_pure_pursuit.yaml
+    train: false
+  oracle_slot:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_oracle_slot.yaml
+    train: false
+  hungarian_slot:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_hungarian_slot.yaml
+    train: false
+  ot_slot:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_ot_slot.yaml
+    train: false
+  fixed_ring:
+    kind: heuristic
+    config: configs/experiment/e2_obstacles_pyflyt_fixed_ring.yaml
+    train: false
+  mappo:
+    kind: rl
+    config: configs/experiment/pursuit_evasion_mappo_3v1_ex2.yaml
+    train: true
+    task_speed:
+      pursuer_speed: 0.20
+      evader_speed: 0.06
+  dream_mappo_full:
+    kind: rl
+    config: configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml
+    train: true
+    task_speed:
+      pursuer_speed: 0.15
+      evader_speed: 0.08

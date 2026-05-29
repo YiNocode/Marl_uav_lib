@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+
+# PyFlyt motor models use Numba; some Numba releases fail to compile them on Windows.
+# Disable JIT before importing PyFlyt so debug runs and rollouts stay reliable.
+os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+
 from dataclasses import dataclass
 from typing import Any
 

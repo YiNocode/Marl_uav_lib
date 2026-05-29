@@ -1,0 +1,25 @@
+# E2 obstacle-rich PyFlyt 3v1 backend config (RL / tighter yaw box).
+#
+# Kept separate from configs/env/pyflyt_3v1.yaml and E1 open-space configs so
+# the E2 benchmark can evolve independently. Scenario task defaults come from
+# configs/env/e2_obstacle_scenario.yaml.
+
+scenario_config: configs/env/e2_obstacle_scenario.yaml
+
+env_id: pyflyt_navigation
+action_space: continuous
+action_dim: 4
+# Policy/command box (not m/s). Task maps action/ref * pursuer_speed_xy → setpoint.
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
+
+backend:
+  num_agents: 4
+  drone_type: quadx
+  render: False
+  physics_hz: 240
+  control_hz: 60
+  world_scale: 5.0
+  flight_mode: 6
+  seed_offset: 0
+  drone_options: {}

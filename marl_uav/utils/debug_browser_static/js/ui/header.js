@@ -49,6 +49,29 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
   let mode = "live";
   let awaitingStart = true;
   let autoFit = true;
+  let lastFrame = null;
+  let lastControlState = null;
+  let startRequested = false;
+
+  function syncStartControls(state = null) {
+    if (state) lastControlState = state;
+    const st = lastControlState || {};
+    const atEpisodeHead =
+      !startRequested &&
+      mode === "live" &&
+      lastFrame &&
+      (lastFrame.event === "episode_start" || lastFrame.event === "reset") &&
+      Number(lastFrame.step ?? 0) === 0 &&
+      Number(st?.run_stats?.completed_episodes ?? lastFrame.run_stats?.completed_episodes ?? 0) === 0;
+    const serverWaiting = !!(st.awaiting_start || st.needs_start_click);
+    awaitingStart = !startRequested && (serverWaiting || atEpisodeHead);
+    btnStart.classList.toggle("hidden", !awaitingStart);
+    btnPause.classList.toggle("hidden", awaitingStart);
+    setOverlay(awaitingStart ? "已加载初始帧，点击「开始」运行仿真" : "", awaitingStart);
+    if (st.paused !== undefined && !awaitingStart) {
+      btnPause.textContent = st.paused ? "继续" : "暂停";
+    }
+  }
 
   function updateRunStats(stats) {
     if (!stats || stats.completed_episodes === undefined) {
@@ -65,6 +88,7 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
 
   function setMode(next) {
     mode = next;
+    if (next === "live") startRequested = false;
     header.querySelectorAll(".mode-tabs button").forEach((b) => {
       b.classList.toggle("active", b.dataset.mode === next);
     });
@@ -90,7 +114,33 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
     btn.addEventListener("click", () => setMode(btn.dataset.mode));
   });
 
-  btnStart.addEventListener("click", () => onStartLive());
+  btnStart.addEventListener("click", async () => {
+    btnStart.disabled = true;
+    startRequested = true;
+    syncStartControls();
+    try {
+      const state = await onStartLive();
+      if (!state) {
+        startRequested = false;
+        conn.textContent = "控制失败";
+        conn.className = "status err";
+        alert("无法发送开始指令。请确认 run_debug_browser.py 正在运行，然后重试。");
+        syncStartControls();
+        return;
+      }
+      syncStartControls(state);
+      conn.textContent = "运行中";
+      conn.className = "status ok";
+    } catch (err) {
+      startRequested = false;
+      conn.textContent = "控制失败";
+      conn.className = "status err";
+      alert(err?.message || String(err));
+      syncStartControls();
+    } finally {
+      btnStart.disabled = false;
+    }
+  });
   btnPause.addEventListener("click", () => {
     const paused = btnPause.textContent === "暂停";
     onPauseLive(paused);
@@ -163,19 +213,26 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
         speedSlider.value = String(state.playback_speed);
         speedVal.textContent = `${Number(state.playback_speed).toFixed(2)}×`;
       }
-      awaitingStart = !!state.awaiting_start;
-      btnStart.classList.toggle("hidden", !awaitingStart);
-      btnPause.classList.toggle("hidden", awaitingStart);
-      setOverlay(awaitingStart ? "已加载初始帧，点击「开始」运行仿真" : "", awaitingStart);
-      if (state.paused !== undefined && !awaitingStart) {
-        btnPause.textContent = state.paused ? "继续" : "暂停";
-      }
+      syncStartControls(state);
       if (state.episode_idx && state.total_episodes) {
         epStatus.textContent = `Episode ${state.episode_idx}/${state.total_episodes}`;
       }
       if (state.run_stats) updateRunStats(state.run_stats);
     },
     onFrame(frame, source) {
+      lastFrame = frame;
+      if (source === "live" && frame.event === "sim_error") {
+        startRequested = false;
+        conn.textContent = "仿真错误";
+        conn.className = "status err";
+        setOverlay(String(frame.error || "仿真运行失败，请查看终端日志"), true);
+        syncStartControls();
+        return;
+      }
+      if (source === "live" && frame.event === "step" && Number(frame.step ?? 0) > 0) {
+        startRequested = false;
+      }
+      syncStartControls();
       stepStatus.textContent = `${source} step=${frame.step ?? "—"} event=${frame.event ?? "—"}`;
       if (frame.event === "episode_start") {
         epStatus.textContent = `Episode ${frame.episode}/${frame.total_episodes || "?"}`;

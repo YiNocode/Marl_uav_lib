@@ -1,19 +1,13 @@
 # MAPPO on PyFlyt 3v1 pursuit with cylindrical obstacles (ex2)
 #
-# - Env:   PyFlytAviaryEnv + pursuit_evasion_3v1_ex2（marl_uav...pursuit_evasion_3v1_task_ex2）
-# - 每回合 5~10 根圆柱障碍；pursuer 在任务几何意义上碰柱即 terminated
+# - Env:   configs/env/e2_pyflyt_3v1_obstacles.yaml
+# - Task:  pursuit_evasion_3v1_ex2 + scenario defaults in e2_obstacle_scenario.yaml
 
-env: configs/env/pyflyt_3v1.yaml
+env: configs/env/e2_pyflyt_3v1_obstacles.yaml
 algo: configs/algo/mappo.yaml
 model: configs/model/centralized_critic.yaml
 
 task:
-  name: pursuit_evasion_3v1_ex2
-  world_xy: 20.0
-  z_min: 0.5
-  z_max: 5.0
-  capture_dist: 1
-  episode_limit: 1000
   pursuer_speed: 0.20
   evader_speed: 0.06
   min_pursuer_sep: 0.6
@@ -58,10 +52,6 @@ task:
   obstacle_manifold_bump_scale: 0.35
   obstacle_manifold_max_extra_radius_scale: 1.5
   manifold_curve_num_samples: 121
-  # ex2 障碍（可按场景再调）
-  num_obstacles_min: 5
-  num_obstacles_max: 10
-  obstacle_collision_penalty: 15.0
 
 seed: 100
 num_envs: 8

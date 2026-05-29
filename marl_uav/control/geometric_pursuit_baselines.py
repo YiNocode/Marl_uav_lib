@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from marl_uav.utils.control_timing import publish_control_timing, should_record_control_timing
+
 
 def _empty_actions(action_low: np.ndarray) -> np.ndarray:
     adim = int(np.asarray(action_low).reshape(-1).shape[0])
@@ -128,6 +130,116 @@ def pure_pursuit_actions_from_state(
     )
 
 
+def deployable_slot_actions_from_state(
+    env: Any,
+    lin_pos: np.ndarray,
+    action_low: np.ndarray,
+    action_high: np.ndarray,
+    *,
+    role_assignment_mode: str | None,
+    xy_gain: float,
+    z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
+) -> np.ndarray:
+    """Proportional slot tracking with explicit manifold role allocation.
+
+    ``role_assignment_mode`` selects the deployable allocator (e.g. ``nearest``
+    for Hungarian / min-cost matching, ``entropic_ot`` for OT). When ``None``,
+    falls back to ``env.task.role_assignment_mode`` (legacy oracle-slot configs).
+    """
+    pos = np.asarray(lin_pos, dtype=np.float32)
+    task_state = env.task_state
+    pursuer_ids = np.asarray(task_state.pursuer_ids, dtype=np.int64).reshape(3)
+    pursuer_pos = pos[pursuer_ids]
+    evader_pos = pos[int(task_state.evader_id)]
+
+    if not hasattr(env.task, "_assigned_targets_from_state"):
+        raise TypeError("Slot baseline requires a pursuit task with slot targets.")
+
+    import time
+
+    record = should_record_control_timing(env)
+    _, assignment, assigned_targets = env.task._assigned_targets_from_state(
+        pursuer_pos,
+        evader_pos,
+        task_state=task_state,
+        role_assignment_mode=role_assignment_mode,
+        record_timing=record,
+    )
+    t_after_role = time.perf_counter()
+    task_state.assigned_target_indices = np.asarray(assignment, dtype=np.int64).copy()
+    actions = proportional_actions_to_targets(
+        pursuer_pos,
+        assigned_targets,
+        action_low,
+        action_high,
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
+    if record:
+        publish_control_timing(env, action_mapping_time=time.perf_counter() - t_after_role)
+    return actions
+
+
+def hungarian_slot_actions_from_state(
+    env: Any,
+    lin_pos: np.ndarray,
+    action_low: np.ndarray,
+    action_high: np.ndarray,
+    *,
+    xy_gain: float,
+    z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
+) -> np.ndarray:
+    """Hungarian slot controller: min-cost UAV→slot matching on the manifold."""
+    return deployable_slot_actions_from_state(
+        env,
+        lin_pos,
+        action_low,
+        action_high,
+        role_assignment_mode="nearest",
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
+
+
+def ot_slot_actions_from_state(
+    env: Any,
+    lin_pos: np.ndarray,
+    action_low: np.ndarray,
+    action_high: np.ndarray,
+    *,
+    xy_gain: float,
+    z_gain: float,
+    pursuer_yaw: np.ndarray | None = None,
+    yaw_gain: float = 0.0,
+    yaw_align_min_speed: float = 0.25,
+) -> np.ndarray:
+    """OT slot controller: entropic optimal-transport role allocation on the manifold."""
+    return deployable_slot_actions_from_state(
+        env,
+        lin_pos,
+        action_low,
+        action_high,
+        role_assignment_mode="entropic_ot",
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        pursuer_yaw=pursuer_yaw,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
+
+
 def oracle_slot_actions_from_state(
     env: Any,
     lin_pos: np.ndarray,
@@ -140,27 +252,13 @@ def oracle_slot_actions_from_state(
     yaw_gain: float = 0.0,
     yaw_align_min_speed: float = 0.25,
 ) -> np.ndarray:
-    """Oracle slot controller: move directly toward the task's assigned slot targets."""
-    pos = np.asarray(lin_pos, dtype=np.float32)
-    task_state = env.task_state
-    pursuer_ids = np.asarray(task_state.pursuer_ids, dtype=np.int64).reshape(3)
-    pursuer_pos = pos[pursuer_ids]
-    evader_pos = pos[int(task_state.evader_id)]
-
-    if not hasattr(env.task, "_assigned_targets_from_state"):
-        raise TypeError("Oracle slot baseline requires a pursuit task with slot targets.")
-
-    _, assignment, assigned_targets = env.task._assigned_targets_from_state(
-        pursuer_pos,
-        evader_pos,
-        task_state=task_state,
-    )
-    task_state.assigned_target_indices = np.asarray(assignment, dtype=np.int64).copy()
-    return proportional_actions_to_targets(
-        pursuer_pos,
-        assigned_targets,
+    """Legacy oracle slot: uses ``task.role_assignment_mode`` from experiment YAML."""
+    return deployable_slot_actions_from_state(
+        env,
+        lin_pos,
         action_low,
         action_high,
+        role_assignment_mode=None,
         xy_gain=xy_gain,
         z_gain=z_gain,
         pursuer_yaw=pursuer_yaw,
@@ -193,7 +291,11 @@ def make_pure_pursuit_get_actions_fn(
         backend = env.prev_backend_state
         lin_pos = np.asarray(backend.states[:, 3, :], dtype=np.float32)
         yaws = pursuer_yaws_from_backend(backend, env.task_state.pursuer_ids)
-        return pure_pursuit_actions_from_state(
+        import time
+
+        record = should_record_control_timing(env)
+        t_map = time.perf_counter() if record else None
+        actions = pure_pursuit_actions_from_state(
             lin_pos,
             env.task_state.pursuer_ids,
             env.task_state.evader_id,
@@ -205,35 +307,41 @@ def make_pure_pursuit_get_actions_fn(
             yaw_gain=yaw_gain,
             yaw_align_min_speed=yaw_align_min_speed,
         )
+        if record and t_map is not None:
+            publish_control_timing(env, action_mapping_time=time.perf_counter() - t_map)
+        return actions
 
     return get_actions
 
 
-def make_oracle_slot_get_actions_fn(
+def _make_slot_get_actions_fn(
     env: Any,
     *,
+    role_assignment_mode: str | None,
+    actions_from_state_fn: Any,
+    label: str,
     xy_gain: float | None = 0.25,
     z_gain: float | None = 0.20,
     yaw_gain: float | None = 0.25,
     yaw_align_min_speed: float = 0.25,
 ):
-    """Build a RolloutWorker ``get_actions_fn`` for the oracle slot controller."""
     if getattr(env, "_action_space_type", "") != "continuous":
-        raise ValueError("oracle-slot baseline requires a continuous action-space env")
+        raise ValueError(f"{label} baseline requires a continuous action-space env")
     low = np.asarray(env.action_low_np, dtype=np.float32)
     high = np.asarray(env.action_high_np, dtype=np.float32)
     xy_gain, z_gain, yaw_gain = default_proportional_gains(
         low, high, xy_gain=xy_gain, z_gain=z_gain, yaw_gain=yaw_gain
     )
+    del role_assignment_mode
 
     def get_actions(obs_list: Any, state: Any, avail_actions: Any) -> np.ndarray:
         del obs_list, state, avail_actions
         if env.prev_backend_state is None or env.task_state is None:
-            raise RuntimeError("Environment must be reset before selecting oracle-slot actions.")
+            raise RuntimeError(f"Environment must be reset before selecting {label} actions.")
         backend = env.prev_backend_state
         lin_pos = np.asarray(backend.states[:, 3, :], dtype=np.float32)
         yaws = pursuer_yaws_from_backend(backend, env.task_state.pursuer_ids)
-        return oracle_slot_actions_from_state(
+        return actions_from_state_fn(
             env,
             lin_pos,
             low,
@@ -246,3 +354,66 @@ def make_oracle_slot_get_actions_fn(
         )
 
     return get_actions
+
+
+def make_hungarian_slot_get_actions_fn(
+    env: Any,
+    *,
+    xy_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
+):
+    """Build a RolloutWorker ``get_actions_fn`` for Hungarian slot tracking."""
+    return _make_slot_get_actions_fn(
+        env,
+        role_assignment_mode="nearest",
+        actions_from_state_fn=hungarian_slot_actions_from_state,
+        label="hungarian-slot",
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
+
+
+def make_ot_slot_get_actions_fn(
+    env: Any,
+    *,
+    xy_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
+):
+    """Build a RolloutWorker ``get_actions_fn`` for OT slot tracking."""
+    return _make_slot_get_actions_fn(
+        env,
+        role_assignment_mode="entropic_ot",
+        actions_from_state_fn=ot_slot_actions_from_state,
+        label="ot-slot",
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )
+
+
+def make_oracle_slot_get_actions_fn(
+    env: Any,
+    *,
+    xy_gain: float | None = 0.25,
+    z_gain: float | None = 0.20,
+    yaw_gain: float | None = 0.25,
+    yaw_align_min_speed: float = 0.25,
+):
+    """Build a RolloutWorker ``get_actions_fn`` for the legacy oracle slot controller."""
+    return _make_slot_get_actions_fn(
+        env,
+        role_assignment_mode=None,
+        actions_from_state_fn=oracle_slot_actions_from_state,
+        label="oracle-slot",
+        xy_gain=xy_gain,
+        z_gain=z_gain,
+        yaw_gain=yaw_gain,
+        yaw_align_min_speed=yaw_align_min_speed,
+    )

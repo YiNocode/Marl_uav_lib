@@ -44,6 +44,19 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             slot_targets=True,
             role_allocation=True,
         )
+    if "hungarian_slot" in cfg:
+        return _profile(
+            "hungarian_slot",
+            slot_targets=True,
+            role_allocation=True,
+        )
+    if "ot_slot" in cfg:
+        return _profile(
+            "ot_slot",
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+        )
     if "fixed_ring" in cfg:
         return _profile(
             "fixed_ring",
@@ -70,6 +83,10 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         return resolve_viz_profile({**cfg, "sce": {}})
     if method in ("oracle_slot", "oracleslot"):
         return resolve_viz_profile({**cfg, "oracle_slot": {}})
+    if method in ("hungarian_slot", "hungarian"):
+        return resolve_viz_profile({**cfg, "hungarian_slot": {}})
+    if method in ("ot_slot", "ot"):
+        return resolve_viz_profile({**cfg, "ot_slot": {}})
     if method in ("fixed_ring", "fixedring"):
         return resolve_viz_profile({**cfg, "fixed_ring": {}})
     if method in ("pure_pursuit", "purepursuit"):

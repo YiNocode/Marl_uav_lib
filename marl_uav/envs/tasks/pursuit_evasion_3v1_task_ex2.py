@@ -12,7 +12,7 @@ from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
 
 @dataclass
 class PursuitEvasion3v1TaskEx2State(PursuitEvasion3v1TaskState):
-    """ex1 状态 + 本回合随机生成的圆柱障碍物（竖直轴平行 z，贯穿飞行高度带）。"""
+    """ex1 状态 + 本回合圆柱障碍物（竖直轴平行 z，贯穿飞行高度带）。"""
 
     obstacle_xy: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 2), dtype=np.float32)
@@ -24,8 +24,16 @@ class PursuitEvasion3v1TaskEx2State(PursuitEvasion3v1TaskState):
 
 class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
     """
-    在 ex1（结构感知观测、自适应尺度等）基础上：
-    - 每回合在场地内随机生成 num_obstacles_min~num_obstacles_max 根圆柱障碍物；
+    在 ex1（结构感知观测、自适应尺度等）基础上增加圆柱障碍物（ex2）。
+
+    场景级参数（障碍网格间距、半径比例、碰撞惩罚等）默认在
+    ``configs/env/e2_obstacle_scenario.yaml`` 中配置，经 env ``scenario_config``
+    合并进 task；实验 YAML 仅保留方法相关的速度与奖励覆盖。
+
+    在 ex1 基础上：
+    - 每回合在场地内按网格生成圆柱障碍物（数量由 world_xy 与 obstacle_grid_spacing 决定）；
+    - 柱心自地图左上角 (-world_xy, +world_xy) 起按 obstacle_grid_spacing 铺满全场
+      （先沿 +x 逐行，再沿 -y 换行）；
     - 圆柱在 xy 上为圆域，z 方向覆盖 [z_min, z_max]（与有效飞行高度一致）；
     - 任一架 pursuer 机体中心在 xy 上进入「柱半径 + pursuer_obstacle_hit_radius」内即视为碰撞，
       本步起 terminated=True（回合终结）。
@@ -49,6 +57,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         pursuer_obstacle_hit_radius_ratio: float = 0.015,
         init_clearance_extra_ratio: float = 0.02,
         obstacle_collision_penalty: float = 15.0,
+        obstacle_grid_spacing: float = 4.0,
         max_obstacle_place_trials: int = 8000,
         obstacle_manifold_top_k: int = 4,
         obstacle_manifold_influence_radius_scale: float = 2.5,
@@ -70,10 +79,8 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         self.pursuer_obstacle_hit_radius_ratio = float(pursuer_obstacle_hit_radius_ratio)
         self.init_clearance_extra_ratio = float(init_clearance_extra_ratio)
         self.obstacle_collision_penalty = float(obstacle_collision_penalty)
+        self.obstacle_grid_spacing = max(float(obstacle_grid_spacing), 1e-3)
         self.max_obstacle_place_trials = int(max_obstacle_place_trials)
-        # 与 ex1 的 pos_xy_norm 一致，用于柱坐标 / 半径归一化
-        self._obstacle_feature_slots = int(self.num_obstacles_max)
-        self.obstacle_obs_extra_dim = 4 * self._obstacle_feature_slots
         self.obstacle_manifold_top_k = max(int(obstacle_manifold_top_k), 1)
         self.obstacle_manifold_influence_radius_scale = max(
             float(obstacle_manifold_influence_radius_scale), 1e-3
@@ -90,6 +97,19 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         self.obstacle_manifold_max_extra_radius_scale = max(
             float(obstacle_manifold_max_extra_radius_scale), 0.0
         )
+        self._sync_obstacle_grid_capacity()
+
+    def _sync_obstacle_grid_capacity(self) -> None:
+        """根据网格布局同步场上柱数与观测特征槽位数。"""
+        r_lo, r_hi = self._obstacle_r_min_max()
+        r = 0.5 * (r_lo + r_hi)
+        grid_n = len(self._grid_obstacle_centers(r))
+        self._grid_obstacle_count = int(grid_n)
+        if grid_n > 0:
+            self.num_obstacles_min = grid_n
+            self.num_obstacles_max = max(self.num_obstacles_max, grid_n)
+        self._obstacle_feature_slots = int(self.num_obstacles_max)
+        self.obstacle_obs_extra_dim = 4 * self._obstacle_feature_slots
 
     def _obstacle_r_min_max(self) -> tuple[float, float]:
         lo = self.obstacle_radius_min_ratio * self.world_xy
@@ -110,40 +130,42 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
     def _arena_inner_margin(self) -> float:
         return max(0.05, self.arena_edge_margin_ratio * self.world_xy)
 
+    def _obstacle_center_inside_arena(self, x: float, y: float, r: float) -> bool:
+        lim = float(self.world_xy)
+        return -lim <= x <= lim + 1e-6 and -lim <= y <= lim + 1e-6
+
+    def _grid_obstacle_centers(self, r: float) -> list[tuple[float, float]]:
+        """自左上角 (-world_xy, +world_xy) 起，沿 +x / -y 以固定间距扫描合法柱心。"""
+        spacing = self.obstacle_grid_spacing
+        x_origin = -float(self.world_xy)
+        y_origin = float(self.world_xy)
+        y_limit = -float(self.world_xy)
+
+        centers: list[tuple[float, float]] = []
+        y = y_origin
+        while y >= y_limit - 1e-6:
+            x = x_origin
+            while x <= float(self.world_xy) + 1e-6:
+                if self._obstacle_center_inside_arena(x, y, r):
+                    centers.append((float(x), float(y)))
+                x += spacing
+            y -= spacing
+        return centers
+
     def _sample_obstacles(self, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-        k = int(rng.integers(self.num_obstacles_min, self.num_obstacles_max + 1))
+        del rng  # 网格布局为确定性全场铺设，不随机抽样
         r_lo, r_hi = self._obstacle_r_min_max()
-        min_gap = self._obstacle_min_gap_xy()
-        edge_m = self._arena_inner_margin()
+        r = float(0.5 * (r_lo + r_hi))
 
-        centers: list[list[float]] = []
-        radii: list[float] = []
-        trials = 0
-        while len(centers) < k and trials < self.max_obstacle_place_trials:
-            trials += 1
-            r = float(rng.uniform(r_lo, r_hi))
-            x_max = self.world_xy - edge_m - r
-            x_min = -self.world_xy + edge_m + r
-            y_max = self.world_xy - edge_m - r
-            y_min = -self.world_xy + edge_m + r
-            if x_min >= x_max or y_min >= y_max:
-                break
-            x = float(rng.uniform(x_min, x_max))
-            y = float(rng.uniform(y_min, y_max))
-            ok = True
-            for (cx, cy), cr in zip(centers, radii):
-                if np.hypot(x - cx, y - cy) < r + cr + min_gap:
-                    ok = False
-                    break
-            if ok:
-                centers.append([x, y])
-                radii.append(r)
-
-        if not centers:
+        grid = self._grid_obstacle_centers(r)
+        if not grid:
             return (
                 np.zeros((0, 2), dtype=np.float32),
                 np.zeros((0,), dtype=np.float32),
             )
+
+        centers = [list(pt) for pt in grid]
+        radii = [r] * len(grid)
         return (
             np.asarray(centers, dtype=np.float32),
             np.asarray(radii, dtype=np.float32),

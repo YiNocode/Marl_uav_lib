@@ -3,20 +3,13 @@
 #
 # Keep this file aligned with:
 #   configs/experiment/pursuit_evasion_dream_mappo_3v1_ex2.yaml
-# The only intentional difference is env -> configs/env/genesis_3v1.yaml.
+# The only intentional difference is env -> configs/env/e2_genesis_3v1_obstacles.yaml.
 
-env: configs/env/genesis_3v1.yaml
+env: configs/env/e2_genesis_3v1_obstacles.yaml
 algo: configs/algo/dream_mappo.yaml
 model: configs/model/dream_mappo_centralized.yaml
 
 task:
-  name: pursuit_evasion_3v1_ex2
-  # Arena / episode settings. These mirror the PyFlyt ex2 config.
-  world_xy: 20.0
-  z_min: 0.5
-  z_max: 5.0
-  capture_dist: 1
-  episode_limit: 1000
   # High-level velocity limits used by the pursuit task before backend control.
   pursuer_speed: 0.15
   evader_speed: 0.08
@@ -66,9 +59,6 @@ task:
   obstacle_manifold_bump_scale: 0.35
   obstacle_manifold_max_extra_radius_scale: 1.5
   manifold_curve_num_samples: 121
-  num_obstacles_min: 5
-  num_obstacles_max: 10
-  obstacle_collision_penalty: 15.0
 
 seed: 205
 # Genesis uses native scene replication for this value; no subprocess VecEnv is spawned.

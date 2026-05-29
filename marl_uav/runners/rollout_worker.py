@@ -77,6 +77,13 @@ class RolloutWorker(BaseRunner):
                 return x.detach().cpu().numpy()
             return np.asarray(x)
 
+        import time
+
+        from marl_uav.utils.control_timing import publish_control_timing, should_record_control_timing
+
+        record = should_record_control_timing(getattr(self, "env", None))
+        t0 = time.perf_counter() if record else None
+
         if self._get_actions_fn is not None:
             out = self._get_actions_fn(obs, state, avail_actions)
         else:
@@ -118,6 +125,9 @@ class RolloutWorker(BaseRunner):
         values_np = _to_numpy(values)
         if isinstance(values_np, np.ndarray) and values_np.ndim > 1 and values_np.shape[0] == 1:
             values_np = values_np[0]
+
+        if record and t0 is not None:
+            publish_control_timing(self.env, total_decision_latency=time.perf_counter() - t0)
 
         return actions_np, log_probs_np, values_np
 
@@ -187,6 +197,7 @@ class RolloutWorker(BaseRunner):
                 seed=seed,
             )
             if ep_idx == 1:
+                hub.arm_start_gate()
                 hub.wait_if_blocked()
 
         # ex2 圆柱：reset 时柱布局固定整局，供评估轨迹画图与日志
@@ -304,13 +315,12 @@ class RolloutWorker(BaseRunner):
                 from marl_uav.utils.debug_browser import publish_env_frame
 
                 dream_step = self._maybe_extract_dream_manifold_snapshot(next_state)
-                if dream_step is not None:
-                    publish_env_frame(
-                        self.env,
-                        step_info,
-                        event="step",
-                        dream_manifold=dream_step,
-                    )
+                publish_env_frame(
+                    self.env,
+                    step_info,
+                    event="step",
+                    dream_manifold=dream_step,
+                )
                 debug_hub.wait_after_step()
 
             if record_trajectory and getattr(self.env, "prev_backend_state", None) is not None:

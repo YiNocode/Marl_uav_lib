@@ -193,10 +193,6 @@ def build_obstacle_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, A
     for seed in args.seeds:
         cfg = _mappo_ex2_train_cfg()
         cfg["seed"] = int(seed)
-        cfg["task"]["name"] = "pursuit_evasion_3v1_ex2"
-        cfg["task"]["num_obstacles_min"] = 5
-        cfg["task"]["num_obstacles_max"] = 10
-        cfg["task"]["obstacle_collision_penalty"] = 15.0
         run_name = f"pursuit_obstacles_seed{seed}"
         runs.append((run_name, cfg, None, None))
     return runs

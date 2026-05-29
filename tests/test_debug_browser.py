@@ -87,6 +87,26 @@ def _fake_env():
     return env
 
 
+def test_build_debug_frame_includes_control_timing():
+    env = _fake_env()
+    env._last_control_timing = {
+        "manifold_update_time": 0.0012,
+        "slot_assignment_time": 0.0008,
+        "total_decision_latency": 0.0045,
+        "control_frequency": 222.2,
+        "nominal_control_hz": 50.0,
+    }
+    info = {"termination_reason": "running"}
+    viz = resolve_viz_profile({"sce": {}})
+    frame = build_debug_frame(env, info, event="step", extra={"viz": viz})
+    ct = frame["control_timing"]
+    assert ct["slot_assignment_time"] == 0.0008
+    assert ct["manifold_update_time"] == 0.0012
+    assert ct["total_decision_latency"] == 0.0045
+    assert ct["control_frequency"] == 222.2
+    assert ct["nominal_control_hz"] == 50.0
+
+
 def test_build_debug_frame_includes_manifold_and_ot():
     env = _fake_env()
     info = {
@@ -142,6 +162,18 @@ def test_build_debug_frame_includes_kinematics():
     assert agents[3]["label"] == "E"
 
 
+def test_build_debug_frame_includes_obstacles_from_task_state():
+    env = _fake_env()
+    env.task_state.obstacle_xy = np.array([[1.0, 2.0], [-3.0, 0.5]], dtype=np.float32)
+    env.task_state.obstacle_r = np.array([0.4, 0.6], dtype=np.float32)
+    info = {"termination_reason": "running"}
+    viz = resolve_viz_profile({"pure_pursuit": {}})
+    frame = build_debug_frame(env, info, event="step", extra={"viz": viz})
+    assert "obstacles" in frame
+    assert len(frame["obstacles"]["xy"]) == 2
+    np.testing.assert_allclose(frame["obstacles"]["r"], [0.4, 0.6], rtol=1e-5)
+
+
 def test_hub_capture_rate_stats():
     configure_debug_browser(enabled=False)
     hub = configure_debug_browser(
@@ -185,6 +217,7 @@ def test_hub_publish_roundtrip():
     msg = sub.get(timeout=1.0)
     payload = json.loads(msg)
     assert payload["step"] == 1
+    hub.arm_start_gate()
     hub.start_run()
     state = hub.get_control_state()
     assert state["awaiting_start"] is False
@@ -193,3 +226,88 @@ def test_hub_publish_roundtrip():
     assert hub.get_control_state()["total_episodes"] == 10
     configure_debug_browser(enabled=False)
     assert get_debug_browser_hub() is None
+
+
+def test_hub_episode_marker_carries_visual_snapshot():
+    configure_debug_browser(enabled=False)
+    hub = configure_debug_browser(
+        enabled=True,
+        port=18768,
+        autostart=False,
+        start_paused=True,
+    )
+    assert hub is not None
+    sub = hub.subscribe()
+    hub.publish(
+        {
+            "event": "reset",
+            "step": 0,
+            "positions": [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
+            "agent_labels": ["P0", "E"],
+        }
+    )
+    sub.get(timeout=1.0)
+    hub.publish({"event": "episode_start", "step": 0, "episode": 1})
+    marker = json.loads(sub.get(timeout=1.0))
+    assert marker["event"] == "episode_start"
+    assert marker["positions"] == [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]]
+    assert marker["agent_labels"] == ["P0", "E"]
+    configure_debug_browser(enabled=False)
+
+
+def test_hub_arm_start_gate():
+    configure_debug_browser(enabled=False)
+    hub = configure_debug_browser(
+        enabled=True,
+        port=18769,
+        autostart=False,
+        start_paused=True,
+    )
+    assert hub is not None
+    hub.next_episode()
+    hub.start_run()
+    assert hub._start_gate.is_set()
+    hub.arm_start_gate()
+    state = hub.get_control_state()
+    assert state["awaiting_start"] is False
+    assert state["needs_start_click"] is False
+    hub.wait_if_blocked()
+    configure_debug_browser(enabled=False)
+
+
+def test_hub_arm_start_gate_without_early_click():
+    configure_debug_browser(enabled=False)
+    hub = configure_debug_browser(
+        enabled=True,
+        port=18770,
+        autostart=False,
+        start_paused=True,
+    )
+    assert hub is not None
+    hub.next_episode()
+    hub.arm_start_gate()
+    state = hub.get_control_state()
+    assert state["awaiting_start"] is True
+    assert state["needs_start_click"] is True
+    hub.start_run()
+    state = hub.get_control_state()
+    assert state["awaiting_start"] is False
+    hub.wait_if_blocked()
+    configure_debug_browser(enabled=False)
+
+
+def test_hub_early_start_before_wait():
+    configure_debug_browser(enabled=False)
+    hub = configure_debug_browser(
+        enabled=True,
+        port=18771,
+        autostart=False,
+        start_paused=True,
+    )
+    assert hub is not None
+    hub.start_run()
+    hub.next_episode()
+    hub.arm_start_gate()
+    hub.wait_if_blocked()
+    assert hub.get_control_state()["needs_start_click"] is False
+    configure_debug_browser(enabled=False)

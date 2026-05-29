@@ -2,7 +2,7 @@ import { createBus } from "./core/bus.js";
 import { createViewport, fitViewport, mergeBounds, attachViewportInteractions } from "./core/viewport.js";
 import { createTrailStore } from "./core/trails.js";
 import { registerScene, getScene, resolveSceneId } from "./scene/registry.js";
-import { pursuit3v1Scene } from "./scene/pursuit_3v1.js";
+import { pursuit3v1Scene, resetObstacleCache } from "./scene/pursuit_3v1.js";
 import { createLiveSource } from "./sources/live.js";
 import { createFileSource } from "./sources/file.js";
 import { mountHeader } from "./ui/header.js";
@@ -21,8 +21,14 @@ export function createApp() {
   const ctx = canvas.getContext("2d");
 
   let latest = null;
+  let latestVisual = null;
   let mode = "live";
   let ui = null;
+
+  function frameForDraw() {
+    if (latest?.positions?.length) return latest;
+    return latestVisual || latest;
+  }
 
   const live = createLiveSource({
     bus,
@@ -42,20 +48,21 @@ export function createApp() {
   function draw(forceFit = false) {
     const w = wrap.clientWidth;
     const h = wrap.clientHeight;
+    const frame = frameForDraw();
     ctx.clearRect(0, 0, w, h);
-    if (!latest) {
+    if (!frame) {
       ctx.fillStyle = "#8b949e";
       ctx.font = "14px sans-serif";
       ctx.fillText(mode === "live" ? "等待仿真数据…" : "请加载 episode 文件", 24, 40);
       return;
     }
-    const scene = getScene(resolveSceneId(latest));
+    const scene = getScene(resolveSceneId(frame));
     if (forceFit || view.autoFit) {
-      const b = scene.collectBounds?.(latest, trails);
+      const b = scene.collectBounds?.(frame, trails);
       if (b) fitViewport(view, b, w, h);
     }
-    scene.draw?.(ctx, { frame: latest, trails, view, w, h });
-    sidebar.innerHTML = scene.renderSidebar?.(latest, {
+    scene.draw?.(ctx, { frame, trails, view, w, h });
+    sidebar.innerHTML = scene.renderSidebar?.(latest || frame, {
       mode,
       replayIndex: file.playback.index,
     }) || "";
@@ -63,6 +70,7 @@ export function createApp() {
 
   bus.on("frame", ({ frame, source, replay }) => {
     latest = frame;
+    if (frame?.positions?.length) latestVisual = frame;
     if (source === "live" || !replay?.seek) trails.onFrame(frame);
     if (source === "replay" && replay?.seek) trails.clear();
     if (source === "replay" && replay?.seek) {
@@ -77,6 +85,7 @@ export function createApp() {
   bus.on("status", (s) => ui?.onStatus?.(s));
   bus.on("replay-status", (s) => ui?.onReplayStatus?.(s));
   bus.on("episode-loaded", ({ doc }) => {
+    resetObstacleCache();
     trails.clear();
     view.autoFit = true;
     ui?.onEpisodeLoaded?.(doc);
@@ -114,6 +123,7 @@ export function createApp() {
         live.stop();
       }
       latest = null;
+      latestVisual = null;
       trails.clear();
       overlay.classList.add("hidden");
       draw();

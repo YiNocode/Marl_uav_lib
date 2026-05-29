@@ -8,6 +8,7 @@ from typing import Any
 from marl_uav.envs.adapters.toy_uav_env import ToyUavEnv
 from marl_uav.utils.config import load_config
 from marl_uav.utils.env_action_bounds import parse_continuous_action_bounds_from_env_cfg
+from marl_uav.utils.env_task_config import merge_task_with_env_defaults
 
 
 def build_pursuit_task_from_config(
@@ -49,7 +50,17 @@ def build_env_from_config(
 ):
     """Build a single environment instance from config."""
     cfg = load_config(env_cfg_path)
-    return build_env_from_config_dict(cfg, seed=seed, task_cfg=task_cfg, env_cfg_path=env_cfg_path)
+    merged_task_cfg = merge_task_with_env_defaults(
+        cfg,
+        task_cfg,
+        env_cfg_path=env_cfg_path,
+    )
+    return build_env_from_config_dict(
+        cfg,
+        seed=seed,
+        task_cfg=merged_task_cfg,
+        env_cfg_path=env_cfg_path,
+    )
 
 
 def build_env_from_config_dict(

@@ -1,0 +1,28 @@
+# E2 obstacle-rich Genesis 3v1 backend config.
+#
+# Action space matches configs/env/e2_pyflyt_3v1_obstacles.yaml. Scenario task
+# defaults come from configs/env/e2_obstacle_scenario.yaml.
+
+scenario_config: configs/env/e2_obstacle_scenario.yaml
+
+env_id: genesis_pursuit_3v1
+backend: genesis
+action_space: continuous
+action_dim: 4
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
+
+backend_config:
+  headless: true
+  viewer_options:
+    run_in_thread: false
+  device: gpu
+  dt: 0.01
+  gravity: [0.0, 0.0, -9.81]
+  n_envs: 1
+  drone_model: CF2X
+  drone_urdf: urdf/drones/cf2x.urdf
+  action_type: velocity
+  low_level_control: set_pos
+  num_pursuers: 3
+  num_evaders: 1

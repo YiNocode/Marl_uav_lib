@@ -95,7 +95,7 @@ mappo_finetune:
   bc_kl_relax_when_stable: 0.8
   bc_kl_coef_max: 0.8
 
-seed: 103
+seed: 101
 num_envs: 1
 num_epochs: 3000
 rollout_steps: 1024

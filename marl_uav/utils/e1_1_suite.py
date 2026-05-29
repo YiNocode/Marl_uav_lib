@@ -8,6 +8,7 @@ from typing import Any
 from marl_uav.utils.config import load_config
 
 E1_1_SUITE_REL = Path("configs/benchmark/e1_1_open_space_suite.yaml")
+E2_OBSTACLES_SUITE_REL = Path("configs/benchmark/e2_obstacles_suite.yaml")
 
 
 def load_e1_1_suite(path: Path | None = None) -> dict[str, Any]:
@@ -15,23 +16,42 @@ def load_e1_1_suite(path: Path | None = None) -> dict[str, Any]:
     return load_config(path or (root / E1_1_SUITE_REL))
 
 
-def is_e1_1_open_space_cfg(cfg: dict[str, Any]) -> bool:
+def load_e2_obstacles_suite(path: Path | None = None) -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[2]
+    return load_config(path or (root / E2_OBSTACLES_SUITE_REL))
+
+
+def is_benchmark_scenario_cfg(cfg: dict[str, Any], scenario: str) -> bool:
     bench = cfg.get("benchmark") or {}
-    return str(bench.get("scenario", "")).strip() == "e1_1_open_space"
+    return str(bench.get("scenario", "")).strip() == str(scenario).strip()
 
 
 def is_rl_experiment_cfg(cfg: dict[str, Any]) -> bool:
     return "algo" in cfg
 
 
-def merge_rl_task_speed(cfg: dict[str, Any], suite: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Inject RL task speed fields from the E1.1 suite when absent from experiment YAML."""
-    if not is_e1_1_open_space_cfg(cfg) or not is_rl_experiment_cfg(cfg):
+def merge_rl_task_speed(
+    cfg: dict[str, Any],
+    suite: dict[str, Any] | None = None,
+    *,
+    method: str | None = None,
+) -> dict[str, Any]:
+    """Inject RL task speed fields from a benchmark suite when absent from experiment YAML."""
+    if not is_rl_experiment_cfg(cfg):
         return cfg
 
     suite = suite or load_e1_1_suite()
-    method = str((cfg.get("benchmark") or {}).get("method", "")).strip()
-    method_meta = dict((suite.get("methods") or {}).get(method) or {})
+    expected_scenario = str(suite.get("scenario", "")).strip()
+    bench = cfg.get("benchmark") or {}
+    cfg_scenario = str(bench.get("scenario", "")).strip()
+    if cfg_scenario and expected_scenario and cfg_scenario != expected_scenario:
+        return cfg
+
+    method_name = (method or str(bench.get("method", ""))).strip()
+    if not method_name:
+        return cfg
+
+    method_meta = dict((suite.get("methods") or {}).get(method_name) or {})
     speed_root = dict(suite.get("speed") or {})
     rl_defaults = dict(speed_root.get("rl_defaults") or {})
     task_speed = {**rl_defaults, **dict(method_meta.get("task_speed") or {})}

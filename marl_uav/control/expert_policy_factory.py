@@ -6,7 +6,9 @@ from typing import Any, Callable
 
 from marl_uav.control.fixed_ring_pursuit import make_fixed_ring_get_actions_fn
 from marl_uav.control.geometric_pursuit_baselines import (
+    make_hungarian_slot_get_actions_fn,
     make_oracle_slot_get_actions_fn,
+    make_ot_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
 
@@ -28,8 +30,12 @@ def make_expert_get_actions_fn(
         return make_fixed_ring_get_actions_fn(env, **cfg)
     if name in ("oracle_slot", "oracleslot"):
         return make_oracle_slot_get_actions_fn(env, **cfg)
+    if name in ("hungarian_slot", "hungarian"):
+        return make_hungarian_slot_get_actions_fn(env, **cfg)
+    if name in ("ot_slot", "ot"):
+        return make_ot_slot_get_actions_fn(env, **cfg)
 
     raise ValueError(
         f"Unsupported BC expert={expert!r}. "
-        "Choose one of: pure_pursuit, fixed_ring, oracle_slot."
+        "Choose one of: pure_pursuit, fixed_ring, oracle_slot, hungarian_slot, ot_slot."
     )

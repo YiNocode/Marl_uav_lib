@@ -8,7 +8,7 @@ backend: pyflyt
 result_root: results/e1_1_open_space_pyflyt
 generated_config_dir: configs/generated/e1_1_open_space
 
-seeds: [103]
+seeds: [101,102,103,104,105]
 eval:
   base_seed: 7010
   episodes_per_seed: 200
@@ -45,8 +45,8 @@ methods:
     config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc.yaml
     train: true
     task_speed:
-      pursuer_speed: 0.15
-      evader_speed: 0.2
+      pursuer_speed: 0.25
+      evader_speed: 0.25
   mappo_bc_improve:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_mappo_bc_improve.yaml
@@ -73,10 +73,18 @@ methods:
     kind: heuristic
     config: configs/experiment/e1_1_open_space_pyflyt_oracle_slot.yaml
     train: false
+  hungarian_slot:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_hungarian_slot.yaml
+    train: false
+  ot_slot:
+    kind: heuristic
+    config: configs/experiment/e1_1_open_space_pyflyt_ot_slot.yaml
+    train: false
   dream_mappo_full:
     kind: rl
     config: configs/experiment/e1_1_open_space_pyflyt_dream_mappo_full.yaml
     train: true
     task_speed:
       pursuer_speed: 0.15
-      evader_speed: 0.20
+      evader_speed: 0.25

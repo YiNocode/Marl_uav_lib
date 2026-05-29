@@ -244,6 +244,7 @@ class PursuitEvasion3v1TaskState:
     initial_mean_radius_xy: float = 0.0
     latest_target_radius_xy: float = 0.0
     elapsed_steps: int = 0
+    last_control_timing: dict[str, float] | None = None
 
 
 class PursuitEvasion3v1Task(BaseTask):
@@ -958,11 +959,33 @@ class PursuitEvasion3v1Task(BaseTask):
         pursuer_pos: np.ndarray,
         evader_pos: np.ndarray,
         task_state: PursuitEvasion3v1TaskState | None = None,
+        *,
+        role_assignment_mode: str | None = None,
+        record_timing: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
+        import time
+
         pursuer_pos = np.asarray(pursuer_pos, dtype=np.float32).reshape(3, 3)
+        t_manifold = time.perf_counter()
         targets = self._reference_manifold_targets(pursuer_pos, evader_pos, task_state=task_state)
-        if self.role_assignment_mode == "fixed":
-            return targets, np.arange(3, dtype=np.int64)
+        manifold_update_time = time.perf_counter() - t_manifold
+        t_assign = time.perf_counter()
+
+        def _finish(targets_out: np.ndarray, assignment_out: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            if record_timing and task_state is not None:
+                task_state.last_control_timing = {
+                    "manifold_update_time": float(manifold_update_time),
+                    "slot_assignment_time": float(time.perf_counter() - t_assign),
+                }
+            return targets_out, assignment_out
+
+        mode = str(
+            self.role_assignment_mode if role_assignment_mode is None else role_assignment_mode
+        ).strip().lower()
+        if mode in {"hungarian", "hungarian_slot"}:
+            mode = "nearest"
+        if mode == "fixed":
+            return _finish(targets, np.arange(3, dtype=np.int64))
 
         dist_mat = np.linalg.norm(
             pursuer_pos[:, None, :] - targets[None, :, :],
@@ -971,7 +994,7 @@ class PursuitEvasion3v1Task(BaseTask):
 
         prev_assignment = None if task_state is None else getattr(task_state, "assigned_target_indices", None)
 
-        if self.role_assignment_mode == "entropic_ot":
+        if mode == "entropic_ot":
             from marl_uav.framework.role_allocation import (
                 default_ot_epsilon,
                 entropic_ot_assignment,
@@ -989,7 +1012,7 @@ class PursuitEvasion3v1Task(BaseTask):
                 prev_assignment=prev_assignment,
                 inertia_margin=self.assignment_inertia_margin,
             )
-            return targets, best_assignment
+            return _finish(targets, best_assignment)
 
         best_perm = (0, 1, 2)
         best_cost = np.inf
@@ -1001,26 +1024,31 @@ class PursuitEvasion3v1Task(BaseTask):
         best_assignment = np.asarray(best_perm, dtype=np.int64)
 
         if prev_assignment is None:
-            return targets, best_assignment
+            return _finish(targets, best_assignment)
         prev_assignment = np.asarray(prev_assignment, dtype=np.int64).reshape(-1)
         if prev_assignment.shape[0] != 3 or len(np.unique(prev_assignment)) != 3:
-            return targets, best_assignment
+            return _finish(targets, best_assignment)
 
         old_cost = float(sum(dist_mat[i, int(prev_assignment[i])] for i in range(3)))
         if best_cost < old_cost - self.assignment_inertia_margin:
-            return targets, best_assignment
-        return targets, prev_assignment.copy()
+            return _finish(targets, best_assignment)
+        return _finish(targets, prev_assignment.copy())
 
     def _assigned_targets_from_state(
         self,
         pursuer_pos: np.ndarray,
         evader_pos: np.ndarray,
         task_state: PursuitEvasion3v1TaskState | None = None,
+        *,
+        role_assignment_mode: str | None = None,
+        record_timing: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         targets, assignment = self._compute_role_targets_and_assignment(
             pursuer_pos,
             evader_pos,
             task_state=task_state,
+            role_assignment_mode=role_assignment_mode,
+            record_timing=record_timing,
         )
         assigned_targets = targets[assignment]
         return targets, assignment, assigned_targets

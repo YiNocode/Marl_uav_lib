@@ -3,6 +3,7 @@
 # The experiment YAML selects the task variant through task.name:
 #   pursuit_evasion_3v1 / pursuit_evasion_3v1_ex1 / pursuit_evasion_3v1_ex2
 #
+# For E2 obstacle-rich PyFlyt runs, prefer configs/env/e2_pyflyt_3v1_obstacles.yaml.
 # Dream-MAPPO uses continuous actions. The policy outputs final environment
 # actions in the same scale as action_low/action_high; the task maps those
 # actions to [vx, vy, yaw_rate, vz] setpoints.

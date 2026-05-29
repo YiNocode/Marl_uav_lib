@@ -11,6 +11,11 @@ Then open http://127.0.0.1:8765/ in a browser.
 
 from __future__ import annotations
 
+import os
+
+# Must be set before PyFlyt/Numba are imported (see pyflyt_aviary_backend.py).
+os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+
 import argparse
 import sys
 import time
@@ -25,14 +30,16 @@ if str(ROOT) not in sys.path:
 
 from marl_uav.control.fixed_ring_pursuit import make_fixed_ring_get_actions_fn
 from marl_uav.control.geometric_pursuit_baselines import (
+    make_hungarian_slot_get_actions_fn,
     make_oracle_slot_get_actions_fn,
+    make_ot_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
 from marl_uav.control.sce_controller import make_sce_get_actions_fn
 from marl_uav.envs.factories import build_env_from_config
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.utils.config import load_config
-from marl_uav.utils.debug_browser import configure_debug_browser
+from marl_uav.utils.debug_browser import configure_debug_browser, get_debug_browser_hub
 from marl_uav.utils.debug_viz import resolve_viz_profile
 from marl_uav.utils.e1_1_suite import merge_rl_task_speed, resolve_speed_bounds
 
@@ -71,6 +78,10 @@ def _build_get_actions_fn(env: Any, cfg: dict[str, Any]):
         return make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
     if "oracle_slot" in cfg:
         return make_oracle_slot_get_actions_fn(env, **dict(cfg.get("oracle_slot", {}) or {}))
+    if "hungarian_slot" in cfg:
+        return make_hungarian_slot_get_actions_fn(env, **dict(cfg.get("hungarian_slot", {}) or {}))
+    if "ot_slot" in cfg:
+        return make_ot_slot_get_actions_fn(env, **dict(cfg.get("ot_slot", {}) or {}))
     if "sce" in cfg:
         return make_sce_get_actions_fn(env, **dict(cfg.get("sce", {}) or {}))
     return None
@@ -151,7 +162,7 @@ def main() -> None:
 
     viz_profile = resolve_viz_profile(cfg)
     controller_cfg: dict[str, Any] = {}
-    for key in ("pure_pursuit", "fixed_ring", "oracle_slot", "sce"):
+    for key in ("pure_pursuit", "fixed_ring", "oracle_slot", "hungarian_slot", "ot_slot", "sce"):
         if key in cfg:
             controller_cfg = dict(cfg.get(key) or {})
 
@@ -193,7 +204,8 @@ def main() -> None:
         worker = _build_rl_worker(env, cfg, cfg_path)
     else:
         raise ValueError(
-            f"Config {cfg_path} must define sce/oracle_slot/pure_pursuit/fixed_ring "
+            f"Config {cfg_path} must define sce/oracle_slot/hungarian_slot/ot_slot/"
+            "pure_pursuit/fixed_ring "
             "or algo+model for RL debug."
         )
 
@@ -210,7 +222,24 @@ def main() -> None:
         for ep in range(int(args.episodes)):
             ep_seed = int(args.seed) + ep
             print(f"[debug-browser] episode {ep + 1}/{args.episodes} seed={ep_seed}")
-            _, info = worker.collect_episode(seed=ep_seed, record_trajectory=False)
+            try:
+                _, info = worker.collect_episode(seed=ep_seed, record_trajectory=False)
+            except Exception as exc:
+                print(f"[debug-browser] episode failed: {exc}")
+                import traceback
+
+                traceback.print_exc()
+                live_hub = get_debug_browser_hub()
+                if live_hub is not None:
+                    live_hub.publish(
+                        {
+                            "event": "sim_error",
+                            "scene_id": "pursuit_3v1",
+                            "error": str(exc),
+                            "step": 0,
+                        }
+                    )
+                raise
             print(
                 f"[debug-browser] done: return={info.get('episode_return', 0):.3f} "
                 f"len={info.get('episode_len', 0)} capture={info.get('capture', False)}"

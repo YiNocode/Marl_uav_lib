@@ -370,6 +370,15 @@ class PyFlytAviaryEnv(BaseEnv):
                 }
             )
             info.update(self._build_reference_manifold_info(backend_state))
+            if isinstance(self.task, PursuitEvasion3v1TaskEx2) and isinstance(
+                self.task_state, PursuitEvasion3v1TaskEx2State
+            ):
+                info["obstacle_xy"] = np.asarray(
+                    self.task_state.obstacle_xy, dtype=np.float32
+                ).copy()
+                info["obstacle_r"] = np.asarray(
+                    self.task_state.obstacle_r, dtype=np.float32
+                ).copy()
 
         t_after_info = time.perf_counter()
         info["timing"] = {

@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from marl_uav.utils.debug_recorder import EpisodeRecorder, validate_episode_document
+from marl_uav.utils.control_timing import control_timing_for_frame
 from marl_uav.utils.debug_viz import (
     _active_viz_profile,
     build_controller_targets,
@@ -29,6 +30,29 @@ from marl_uav.utils.debug_viz import (
 _STATIC_DIR = Path(__file__).resolve().parent / "debug_browser_static"
 _HUB_LOCK = threading.Lock()
 _HUB: "DebugBrowserHub | None" = None
+
+_MARKER_EVENTS = frozenset({"episode_start", "episode_end"})
+_VISUAL_CARRY_KEYS = (
+    "scene_id",
+    "viz",
+    "world_xy",
+    "z_min",
+    "z_max",
+    "positions",
+    "agent_labels",
+    "pursuer_ids",
+    "evader_id",
+    "obstacles",
+    "manifold",
+    "role",
+    "controller_targets",
+    "kinematics",
+    "speed_bounds",
+    "algorithm",
+    "dream_manifold",
+    "pursuit_structure",
+    "control_timing",
+)
 
 
 def _to_list(arr: Any) -> list[Any] | None:
@@ -85,8 +109,15 @@ class DebugBrowserHub:
         self._control_lock = threading.Lock()
         self._playback_speed = max(float(playback_speed), 0.0)
         self._step_dt = max(float(step_dt), 1e-6)
+        self._start_paused = bool(start_paused)
         self._paused = bool(start_paused)
         self._awaiting_start = bool(start_paused)
+        self._start_acknowledged = False
+        self._start_gate = threading.Event()
+        if not start_paused:
+            self._start_gate.set()
+        self._episode_run_started = False
+        self._latest_visual: dict[str, Any] | None = None
         self._completed_episodes = 0
         self._captured_episodes = 0
         self._recorder: EpisodeRecorder | None = None
@@ -120,11 +151,18 @@ class DebugBrowserHub:
 
     def get_control_state(self) -> dict[str, Any]:
         with self._control_lock:
+            waiting_for_start = bool(
+                self._start_paused and not self._episode_run_started and not self._start_gate.is_set()
+            )
+            if waiting_for_start:
+                self._awaiting_start = True
+                self._paused = True
             state = {
                 "playback_speed": float(self._playback_speed),
                 "step_dt": float(self._step_dt),
                 "paused": bool(self._paused),
                 "awaiting_start": bool(self._awaiting_start),
+                "needs_start_click": waiting_for_start,
                 "episode_idx": int(self._episode_idx),
                 "total_episodes": int(self._total_episodes),
             }
@@ -145,8 +183,23 @@ class DebugBrowserHub:
 
     def start_run(self) -> None:
         with self._control_lock:
+            self._start_acknowledged = True
+            self._start_gate.set()
             self._awaiting_start = False
             self._paused = False
+        print("[debug-browser] simulation started")
+
+    def arm_start_gate(self) -> None:
+        """Sync UI flags right before the sim thread blocks for Start."""
+        with self._control_lock:
+            if not self._start_paused:
+                return
+            if self._start_gate.is_set():
+                self._awaiting_start = False
+                self._paused = False
+            else:
+                self._awaiting_start = True
+                self._paused = True
 
     def apply_control_update(self, payload: dict[str, Any]) -> dict[str, Any]:
         if payload.get("start"):
@@ -157,7 +210,8 @@ class DebugBrowserHub:
             self.set_paused(bool(payload["paused"]))
             if not bool(payload["paused"]) and not payload.get("start"):
                 with self._control_lock:
-                    self._awaiting_start = False
+                    if self._episode_run_started:
+                        self._awaiting_start = False
         if "step_dt" in payload:
             self.set_step_dt(float(payload["step_dt"]))
         return self.get_control_state()
@@ -167,9 +221,18 @@ class DebugBrowserHub:
             return bool(self._paused or self._awaiting_start)
 
     def wait_if_blocked(self) -> None:
-        """Block while paused or waiting for the browser Start click."""
-        while self._is_blocked():
+        """Block while waiting for the browser Start click."""
+        if not self._start_paused:
+            with self._control_lock:
+                self._episode_run_started = True
+            return
+        self.arm_start_gate()
+        while not self._start_gate.is_set():
             time.sleep(0.05)
+        with self._control_lock:
+            self._episode_run_started = True
+            self._awaiting_start = False
+            self._paused = False
 
     def wait_after_step(self) -> None:
         """Block between env steps so browser playback matches playback_speed."""
@@ -232,6 +295,16 @@ class DebugBrowserHub:
             if q in self._subscribers:
                 self._subscribers.remove(q)
 
+    def _enrich_marker_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        event = str(payload.get("event", ""))
+        if event not in _MARKER_EVENTS or self._latest_visual is None:
+            return payload
+        enriched = dict(payload)
+        for key in _VISUAL_CARRY_KEYS:
+            if key not in enriched and key in self._latest_visual:
+                enriched[key] = self._latest_visual[key]
+        return enriched
+
     def publish(self, frame: dict[str, Any]) -> None:
         if not self._enabled:
             return
@@ -240,6 +313,10 @@ class DebugBrowserHub:
         if self._meta:
             payload.setdefault("run_meta", self._meta)
         payload["run_stats"] = self.get_run_stats()
+        if payload.get("positions"):
+            self._latest_visual = dict(payload)
+        elif str(payload.get("event", "")) in _MARKER_EVENTS:
+            payload = self._enrich_marker_payload(payload)
         data = json.dumps(payload, ensure_ascii=False)
         if self._recorder is not None:
             try:
@@ -266,6 +343,20 @@ class DebugBrowserHub:
 
     def next_episode(self) -> int:
         self._episode_idx += 1
+        with self._control_lock:
+            early_start = self._start_gate.is_set()
+            self._start_acknowledged = False
+            self._episode_run_started = False
+            if self._start_paused:
+                if early_start:
+                    self._awaiting_start = False
+                    self._paused = False
+                else:
+                    self._start_gate.clear()
+                    self._awaiting_start = True
+                    self._paused = True
+            else:
+                self._start_gate.set()
         return self._episode_idx
 
 
@@ -308,6 +399,12 @@ def configure_debug_browser(
                 _HUB.set_paused(True)
                 with _HUB._control_lock:
                     _HUB._awaiting_start = True
+                    _HUB._start_acknowledged = False
+                    _HUB._episode_run_started = False
+                    _HUB._start_gate.clear()
+            else:
+                _HUB._start_gate.set()
+            _HUB._start_paused = bool(start_paused)
         if meta:
             _HUB.set_meta(meta)
         if autostart:
@@ -416,6 +513,9 @@ def build_debug_frame(
         "rewards": info.get("rewards"),
     }
     frame["kinematics"] = _build_agent_kinematics(backend_state, agent_labels)
+    timing = control_timing_for_frame(env)
+    if timing:
+        frame["control_timing"] = timing
     hub = get_debug_browser_hub()
     if hub is not None and isinstance(hub._meta.get("speed_bounds"), dict):
         frame["speed_bounds"] = dict(hub._meta["speed_bounds"])
@@ -474,11 +574,17 @@ def build_debug_frame(
         if filtered:
             frame["algorithm"] = filtered
 
-    if viz.get("obstacles") and info.get("obstacle_xy") is not None:
-        frame["obstacles"] = {
-            "xy": _to_list(info.get("obstacle_xy")),
-            "r": _to_list(info.get("obstacle_r")),
-        }
+    if viz.get("obstacles"):
+        obstacle_xy = info.get("obstacle_xy")
+        obstacle_r = info.get("obstacle_r")
+        if obstacle_xy is None and task_state is not None:
+            obstacle_xy = getattr(task_state, "obstacle_xy", None)
+            obstacle_r = getattr(task_state, "obstacle_r", None)
+        if obstacle_xy is not None:
+            frame["obstacles"] = {
+                "xy": _to_list(obstacle_xy),
+                "r": _to_list(obstacle_r),
+            }
 
     if extra:
         frame.update(extra)

@@ -7,10 +7,35 @@ const SLOT = "#79c0ff";
 const LINK = "#a371f7";
 const CTRL = "#79c0ff";
 
+/** Static obstacles persist across step frames when backend omits them. */
+let cachedObstacles = null;
+
+function resolveObstacles(frame) {
+  if (frame?.obstacles?.xy?.length) {
+    cachedObstacles = frame.obstacles;
+    return cachedObstacles;
+  }
+  return cachedObstacles;
+}
+
+export function resetObstacleCache() {
+  cachedObstacles = null;
+}
+
 function fmt(v, d = 3) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   if (typeof v === "number") return v.toFixed(d);
   return String(v);
+}
+
+function fmtMs(sec) {
+  if (sec === null || sec === undefined || Number.isNaN(Number(sec))) return "—";
+  return `${(Number(sec) * 1000).toFixed(3)} ms`;
+}
+
+function fmtHz(hz) {
+  if (hz === null || hz === undefined || Number.isNaN(Number(hz))) return "—";
+  return `${Number(hz).toFixed(1)} Hz`;
 }
 
 function panel(title, rows) {
@@ -150,8 +175,9 @@ export const pursuit3v1Scene = {
       (frame?.controller_targets?.targets || []).forEach((p) => add(p[0], p[1]));
     }
     if (viz.obstacles !== false) {
-      (frame?.obstacles?.xy || []).forEach((o, i) => {
-        const r = frame.obstacles.r?.[i] || 0.5;
+      const obstacles = resolveObstacles(frame);
+      (obstacles?.xy || []).forEach((o, i) => {
+        const r = obstacles.r?.[i] || 0.5;
         add(o[0] - r, o[1] - r); add(o[0] + r, o[1] + r);
       });
     }
@@ -180,18 +206,21 @@ export const pursuit3v1Scene = {
     const br = wts(half, -half);
     ctx.strokeRect(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]);
 
-    if (viz.obstacles !== false && frame.obstacles?.xy) {
-      ctx.fillStyle = "rgba(139,148,158,0.25)";
-      ctx.strokeStyle = "#8b949e";
-      frame.obstacles.xy.forEach((o, i) => {
-        const r = frame.obstacles.r?.[i] || 0.5;
-        const [cx, cy] = wts(o[0], o[1]);
-        const rs = Math.max(r * view.scale, 2);
-        ctx.beginPath();
-        ctx.arc(cx, cy, rs, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-      });
+    if (viz.obstacles !== false) {
+      const obstacles = resolveObstacles(frame);
+      if (obstacles?.xy) {
+        ctx.fillStyle = "rgba(139,148,158,0.25)";
+        ctx.strokeStyle = "#8b949e";
+        obstacles.xy.forEach((o, i) => {
+          const r = obstacles.r?.[i] || 0.5;
+          const [cx, cy] = wts(o[0], o[1]);
+          const rs = Math.max(r * view.scale, 2);
+          ctx.beginPath();
+          ctx.arc(cx, cy, rs, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
     }
 
     if (viz.fixed_ring_curve && frame.controller_targets?.ring_curve?.length) {
@@ -331,6 +360,18 @@ export const pursuit3v1Scene = {
         rows.push([`${a.label} v`, `(${fmt(vx, 2)}, ${fmt(vy, 2)}, ${fmt(vz, 2)})`]);
       });
       html += panel("速度 (机体坐标)", rows);
+    }
+
+    const ct = frame?.control_timing;
+    if (ct && Object.keys(ct).length) {
+      const nominal = ct.nominal_control_hz;
+      html += panel("控制时延 / 实时性", [
+        ["流形更新", fmtMs(ct.manifold_update_time)],
+        ["槽位分配", fmtMs(ct.slot_assignment_time)],
+        ["总决策时延", fmtMs(ct.total_decision_latency)],
+        ["控制频率", fmtHz(ct.control_frequency)],
+        ...(nominal != null ? [["标称控制频率", fmtHz(nominal)]] : []),
+      ]);
     }
 
     if (viz.structure_metrics && Object.keys(ps).length) {

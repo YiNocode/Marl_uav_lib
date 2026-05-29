@@ -31,7 +31,9 @@ if str(ROOT) not in sys.path:
 from marl_uav.agents.mac import MAC
 from marl_uav.control.fixed_ring_pursuit import make_fixed_ring_get_actions_fn
 from marl_uav.control.geometric_pursuit_baselines import (
+    make_hungarian_slot_get_actions_fn,
     make_oracle_slot_get_actions_fn,
+    make_ot_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
 from marl_uav.control.sce_controller import make_sce_get_actions_fn
@@ -93,7 +95,7 @@ def generate_train_configs(
         if not bool(meta.get("train", False)):
             continue
         base_path = ROOT / str(meta["config"])
-        cfg = merge_rl_task_speed(load_config(base_path), suite=suite)
+        cfg = merge_rl_task_speed(load_config(base_path), suite=suite, method=method)
         for seed in seeds:
             out = generated_config_path(suite, method, seed)
             if out.exists() and not overwrite:
@@ -355,12 +357,16 @@ def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
         get_actions = make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
     elif "oracle_slot" in cfg:
         get_actions = make_oracle_slot_get_actions_fn(env, **dict(cfg.get("oracle_slot", {}) or {}))
+    elif "hungarian_slot" in cfg:
+        get_actions = make_hungarian_slot_get_actions_fn(env, **dict(cfg.get("hungarian_slot", {}) or {}))
+    elif "ot_slot" in cfg:
+        get_actions = make_ot_slot_get_actions_fn(env, **dict(cfg.get("ot_slot", {}) or {}))
     elif "sce" in cfg:
         get_actions = make_sce_get_actions_fn(env, **dict(cfg.get("sce", {}) or {}))
     else:
         raise ValueError(
             f"Heuristic config {cfg_path.relative_to(ROOT)} must define one of "
-            "fixed_ring, pure_pursuit, oracle_slot, or sce."
+            "fixed_ring, pure_pursuit, oracle_slot, hungarian_slot, ot_slot, or sce."
         )
     return RolloutWorker(env=env, policy=object(), get_actions_fn=get_actions)
 
@@ -562,9 +568,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         choices=("generate-configs", "pretrain", "train", "eval", "all"),
-        default="train",
+        default="eval",
     )
-    p.add_argument("--methods", nargs="*", default=["mappo"])
+    p.add_argument("--methods", nargs="*", default=["pure_pursuit"])
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument(
         "--checkpoint",

@@ -11,6 +11,7 @@ from marl_uav.control.geometric_pursuit_baselines import (
     proportional_actions_to_targets,
     pursuer_yaws_from_backend,
 )
+from marl_uav.utils.control_timing import publish_control_timing, should_record_control_timing
 
 
 def sce_proportional_actions_from_state(
@@ -46,13 +47,18 @@ def sce_proportional_actions_from_state(
             f"SCE controller expects role_assignment_mode='entropic_ot', got {mode!r}"
         )
 
+    import time
+
+    record = should_record_control_timing(env)
     _, assignment, assigned_targets = task._assigned_targets_from_state(
         pursuer_pos,
         evader_pos,
         task_state=task_state,
+        record_timing=record,
     )
+    t_after_role = time.perf_counter()
     task_state.assigned_target_indices = np.asarray(assignment, dtype=np.int64).copy()
-    return proportional_actions_to_targets(
+    actions = proportional_actions_to_targets(
         pursuer_pos,
         assigned_targets,
         action_low,
@@ -63,6 +69,9 @@ def sce_proportional_actions_from_state(
         yaw_gain=yaw_gain,
         yaw_align_min_speed=yaw_align_min_speed,
     )
+    if record:
+        publish_control_timing(env, action_mapping_time=time.perf_counter() - t_after_role)
+    return actions
 
 
 def make_sce_get_actions_fn(

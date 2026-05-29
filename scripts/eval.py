@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from marl_uav.agents.mac import MAC
 from marl_uav.envs.factories import build_env_from_config_dict
+from marl_uav.utils.env_task_config import merge_task_with_env_defaults
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task import (
     PursuitEvasion3v1Task,
     compute_pursuit_structure_metrics_3v1,
@@ -67,7 +68,17 @@ def build_env(
             viewer_options.setdefault("run_in_thread", False)
             backend_cfg["viewer_options"] = viewer_options
         env_cfg["backend_config"] = backend_cfg
-    return build_env_from_config_dict(env_cfg, seed=seed, task_cfg=task_cfg, env_cfg_path=env_cfg_path)
+    merged_task_cfg = merge_task_with_env_defaults(
+        env_cfg,
+        task_cfg,
+        env_cfg_path=env_cfg_path,
+    )
+    return build_env_from_config_dict(
+        env_cfg,
+        seed=seed,
+        task_cfg=merged_task_cfg,
+        env_cfg_path=env_cfg_path,
+    )
 
 
 def build_policy(
