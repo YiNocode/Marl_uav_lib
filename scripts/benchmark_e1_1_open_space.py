@@ -258,6 +258,20 @@ def _role_stability_series(traj_xyz: np.ndarray) -> np.ndarray:
     return stability
 
 
+def _phi_max_array(series: list[dict[str, Any]]) -> np.ndarray:
+    if not series:
+        return np.zeros(0, dtype=np.float64)
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task import phi_max_from_c_cov
+
+    vals: list[float] = []
+    for row in series:
+        if "phi_max" in row:
+            vals.append(float(row["phi_max"]))
+        elif "C_cov" in row:
+            vals.append(phi_max_from_c_cov(float(row["C_cov"])))
+    return np.asarray(vals, dtype=np.float64)
+
+
 def _episode_metrics(
     *,
     info: dict[str, Any],
@@ -271,7 +285,7 @@ def _episode_metrics(
     cov = _value_array(series, "C_cov")
     col = _value_array(series, "C_col")
     dang = _value_array(series, "D_ang")
-    phi_max = _value_array(series, "phi_max")
+    phi_max = _phi_max_array(series)
     fesc = _fesc_series(trajectory)
     role_stability = _role_stability_series(trajectory)
 

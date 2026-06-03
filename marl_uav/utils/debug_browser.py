@@ -7,7 +7,9 @@ trajectories, deformable manifold curves, slot targets, and algorithm params.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import math
 import queue
 import threading
 import time
@@ -61,25 +63,54 @@ def _to_list(arr: Any) -> list[Any] | None:
     return np.asarray(arr, dtype=np.float32).tolist()
 
 
+def _json_safe(value: Any) -> Any:
+    """Convert debug diagnostics into values accepted by ``json.dumps``."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(dataclasses.asdict(value))
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    return str(value)
+
+
 def _build_agent_kinematics(
     backend_state: Any,
     agent_labels: list[str],
 ) -> dict[str, Any]:
-    """Per-agent linear velocity from backend state index 2 (body frame, m/s)."""
+    """Per-agent ground-frame linear velocity from backend state index 2."""
     lin_vel = np.asarray(backend_state.states[:, 2, :], dtype=np.float32)
+    ang_pos = np.asarray(backend_state.states[:, 1, :], dtype=np.float32)
     agents: list[dict[str, Any]] = []
     for idx in range(lin_vel.shape[0]):
         v = lin_vel[idx]
+        yaw = float(ang_pos[idx, 2]) if ang_pos.ndim == 2 and idx < ang_pos.shape[0] and ang_pos.shape[1] >= 3 else 0.0
         label = agent_labels[idx] if idx < len(agent_labels) else f"A{idx}"
         agents.append(
             {
                 "label": label,
                 "linear": v.tolist(),
+                "linear_ground": v.tolist(),
+                "linear_world_xy": v[:2].tolist(),
+                "yaw_rad": float(yaw),
                 "speed_xy": float(np.linalg.norm(v[:2])),
+                "world_speed_xy": float(np.linalg.norm(v[:2])),
                 "speed_3d": float(np.linalg.norm(v)),
             }
         )
-    return {"agents": agents, "frame": "body"}
+    return {"agents": agents, "frame": "ground", "world_xy_available": True}
 
 
 class DebugBrowserHub:
@@ -113,11 +144,16 @@ class DebugBrowserHub:
         self._paused = bool(start_paused)
         self._awaiting_start = bool(start_paused)
         self._start_acknowledged = False
+        self._run_armed = False
         self._start_gate = threading.Event()
         if not start_paused:
             self._start_gate.set()
+            self._run_armed = True
         self._episode_run_started = False
         self._latest_visual: dict[str, Any] | None = None
+        self._publish_count = 0
+        self._publish_event_counts: dict[str, int] = {}
+        self._last_publish_ts_ms = 0
         self._completed_episodes = 0
         self._captured_episodes = 0
         self._recorder: EpisodeRecorder | None = None
@@ -151,23 +187,55 @@ class DebugBrowserHub:
 
     def get_control_state(self) -> dict[str, Any]:
         with self._control_lock:
-            waiting_for_start = bool(
-                self._start_paused and not self._episode_run_started and not self._start_gate.is_set()
+            needs_start_click = bool(
+                self._start_paused
+                and not self._run_armed
+                and not self._episode_run_started
+                and not self._start_gate.is_set()
             )
-            if waiting_for_start:
-                self._awaiting_start = True
-                self._paused = True
             state = {
                 "playback_speed": float(self._playback_speed),
                 "step_dt": float(self._step_dt),
                 "paused": bool(self._paused),
-                "awaiting_start": bool(self._awaiting_start),
-                "needs_start_click": waiting_for_start,
+                "awaiting_start": needs_start_click or (
+                    bool(self._awaiting_start) and not self._run_armed
+                ),
+                "needs_start_click": needs_start_click,
+                "run_armed": bool(self._run_armed),
                 "episode_idx": int(self._episode_idx),
                 "total_episodes": int(self._total_episodes),
             }
         state["run_stats"] = self.get_run_stats()
         return state
+
+    def get_debug_state(self) -> dict[str, Any]:
+        with self._control_lock:
+            control = {
+                "playback_speed": float(self._playback_speed),
+                "step_dt": float(self._step_dt),
+                "paused": bool(self._paused),
+                "awaiting_start": bool(self._awaiting_start),
+                "episode_idx": int(self._episode_idx),
+                "total_episodes": int(self._total_episodes),
+            }
+        with _HUB_LOCK:
+            latest = None
+            if self._latest_json is not None:
+                try:
+                    latest = json.loads(self._latest_json)
+                except json.JSONDecodeError:
+                    latest = {"decode_error": True}
+            return {
+                "control": control,
+                "subscriber_count": len(self._subscribers),
+                "publish_count": int(self._publish_count),
+                "publish_event_counts": dict(self._publish_event_counts),
+                "last_publish_ts_ms": int(self._last_publish_ts_ms),
+                "latest_event": None if latest is None else latest.get("event"),
+                "latest_step": None if latest is None else latest.get("step"),
+                "latest_episode_len": None if latest is None else latest.get("episode_len"),
+                "latest_ts_ms": None if latest is None else latest.get("ts_ms"),
+            }
 
     def set_playback_speed(self, speed: float) -> None:
         with self._control_lock:
@@ -184,6 +252,7 @@ class DebugBrowserHub:
     def start_run(self) -> None:
         with self._control_lock:
             self._start_acknowledged = True
+            self._run_armed = True
             self._start_gate.set()
             self._awaiting_start = False
             self._paused = False
@@ -194,7 +263,8 @@ class DebugBrowserHub:
         with self._control_lock:
             if not self._start_paused:
                 return
-            if self._start_gate.is_set():
+            if self._run_armed or self._start_gate.is_set():
+                self._start_gate.set()
                 self._awaiting_start = False
                 self._paused = False
             else:
@@ -227,6 +297,13 @@ class DebugBrowserHub:
                 self._episode_run_started = True
             return
         self.arm_start_gate()
+        with self._control_lock:
+            if self._run_armed:
+                self._start_gate.set()
+                self._episode_run_started = True
+                self._awaiting_start = False
+                self._paused = False
+                return
         while not self._start_gate.is_set():
             time.sleep(0.05)
         with self._control_lock:
@@ -280,7 +357,7 @@ class DebugBrowserHub:
         self._thread = None
 
     def subscribe(self) -> queue.Queue[str]:
-        q: queue.Queue[str] = queue.Queue(maxsize=64)
+        q: queue.Queue[str] = queue.Queue(maxsize=512)
         with _HUB_LOCK:
             if self._latest_json is not None:
                 try:
@@ -309,10 +386,12 @@ class DebugBrowserHub:
         if not self._enabled:
             return
         payload = dict(frame)
+        payload.setdefault("episode", int(self._episode_idx))
         payload.setdefault("ts_ms", int(time.time() * 1000))
         if self._meta:
             payload.setdefault("run_meta", self._meta)
         payload["run_stats"] = self.get_run_stats()
+        payload = _json_safe(payload)
         if payload.get("positions"):
             self._latest_visual = dict(payload)
         elif str(payload.get("event", "")) in _MARKER_EVENTS:
@@ -324,39 +403,47 @@ class DebugBrowserHub:
             except Exception:
                 pass
         with _HUB_LOCK:
+            event = str(payload.get("event", ""))
+            self._publish_count += 1
+            self._publish_event_counts[event] = int(self._publish_event_counts.get(event, 0)) + 1
+            self._last_publish_ts_ms = int(payload.get("ts_ms", 0))
             self._latest_json = data
-            dead: list[queue.Queue[str]] = []
             for sub in self._subscribers:
-                try:
-                    sub.put_nowait(data)
-                except queue.Full:
-                    try:
-                        sub.get_nowait()
-                    except queue.Empty:
-                        pass
+                while True:
                     try:
                         sub.put_nowait(data)
+                        break
                     except queue.Full:
-                        dead.append(sub)
-            for sub in dead:
-                self._subscribers.remove(sub)
+                        try:
+                            sub.get_nowait()
+                        except queue.Empty:
+                            break
 
     def next_episode(self) -> int:
         self._episode_idx += 1
+        self._latest_visual = None
         with self._control_lock:
-            early_start = self._start_gate.is_set()
+            auto_continue = bool(self._run_armed or self._start_gate.is_set())
             self._start_acknowledged = False
-            self._episode_run_started = False
             if self._start_paused:
-                if early_start:
+                if auto_continue:
+                    # User already clicked Start once; keep running subsequent episodes.
+                    self._run_armed = True
+                    self._start_gate.set()
                     self._awaiting_start = False
                     self._paused = False
+                    self._episode_run_started = True
                 else:
                     self._start_gate.clear()
                     self._awaiting_start = True
                     self._paused = True
+                    self._episode_run_started = False
             else:
+                self._run_armed = True
                 self._start_gate.set()
+                self._awaiting_start = False
+                self._paused = False
+                self._episode_run_started = True
         return self._episode_idx
 
 
@@ -400,10 +487,12 @@ def configure_debug_browser(
                 with _HUB._control_lock:
                     _HUB._awaiting_start = True
                     _HUB._start_acknowledged = False
+                    _HUB._run_armed = False
                     _HUB._episode_run_started = False
                     _HUB._start_gate.clear()
             else:
                 _HUB._start_gate.set()
+                _HUB._run_armed = True
             _HUB._start_paused = bool(start_paused)
         if meta:
             _HUB.set_meta(meta)
@@ -586,6 +675,54 @@ def build_debug_frame(
                 "r": _to_list(obstacle_r),
             }
 
+    oad = info.get("obstacle_aware_diagnostics") or {}
+    deploy_ctrl = oad.get("deploy_control")
+    is_traj_planner = str((deploy_ctrl or {}).get("local_planner", "")) == "trajectory_planner"
+    if deploy_ctrl and (
+        viz.get("path_tracking")
+        or viz.get("speed_diagnostics")
+        or viz.get("candidate_slots")
+        or (is_traj_planner and (viz.get("manifold_curve") or viz.get("slot_targets")))
+    ):
+        frame["deploy_control"] = deploy_ctrl
+        if (
+            (
+                viz.get("candidate_slots")
+                or is_traj_planner
+            )
+            and isinstance(deploy_ctrl.get("pursuers"), list)
+        ):
+            # Some controller slots are selected outside the task's fixed role
+            # helper. Override the generic role panel with actual controller slots.
+            assigned = []
+            z_ref = float(lin_pos[evader_id, 2])
+            for p in deploy_ctrl.get("pursuers", []):
+                xy = p.get("slot_target_xy") if isinstance(p, dict) else None
+                if xy is not None and len(xy) >= 2:
+                    assigned.append([float(xy[0]), float(xy[1]), z_ref])
+            if len(assigned) == 3:
+                frame["role"] = {
+                    "slot_targets": assigned,
+                    "role_assignment": [0, 1, 2],
+                    "assigned_targets": assigned,
+                }
+
+    if (
+        str((deploy_ctrl or {}).get("local_planner", "")) == "trajectory_planner"
+        and viz.get("manifold_curve")
+    ):
+        closed = deploy_ctrl.get("manifold_curve_xy") if isinstance(deploy_ctrl, dict) else None
+        if closed is None:
+            legacy = deploy_ctrl.get("pursuer_closed_curves") if isinstance(deploy_ctrl, dict) else None
+            if isinstance(legacy, list) and legacy:
+                closed = legacy[0]
+        if closed and len(closed) >= 2:
+            manifold = dict(frame.get("manifold") or {})
+            manifold["curve"] = [[float(pt[0]), float(pt[1])] for pt in closed]
+            manifold.pop("pursuer_curves", None)
+            manifold.pop("pursuer_closed_curves", None)
+            frame["manifold"] = manifold
+
     if extra:
         frame.update(extra)
     return frame
@@ -612,6 +749,10 @@ def publish_episode_marker(event: str, **fields: Any) -> None:
         return
     if event == "episode_end" and "capture" in fields:
         hub.record_episode_result(bool(fields["capture"]))
+    if event == "episode_start":
+        fields.setdefault("step", 0)
+    if event == "episode_end" and "episode_len" in fields:
+        fields.setdefault("step", int(fields["episode_len"]))
     viz = dict(hub._meta.get("viz") or {})
     payload = {
         "event": event,
@@ -665,6 +806,12 @@ def _make_handler(hub: DebugBrowserHub):
                 return
             if path == "/control":
                 self._send_json(hub.get_control_state())
+                return
+            if path == "/latest":
+                self._send_latest()
+                return
+            if path == "/debug":
+                self._send_json(hub.get_debug_state())
                 return
             if path == "/api/recordings":
                 self._send_recordings_list()
@@ -723,7 +870,9 @@ def _make_handler(hub: DebugBrowserHub):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(data)
 
@@ -734,6 +883,20 @@ def _make_handler(hub: DebugBrowserHub):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_latest(self) -> None:
+            with _HUB_LOCK:
+                data = hub._latest_json
+            if data is None:
+                self._send_json({"event": "no_frame", "run_stats": hub.get_run_stats()})
+                return
+            raw = data.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
 
         def _serve_sse(self) -> None:
             self.send_response(HTTPStatus.OK)

@@ -3,9 +3,9 @@ import { createViewport, fitViewport, mergeBounds, attachViewportInteractions } 
 import { createTrailStore } from "./core/trails.js";
 import { registerScene, getScene, resolveSceneId } from "./scene/registry.js";
 import { pursuit3v1Scene, resetObstacleCache } from "./scene/pursuit_3v1.js";
-import { createLiveSource } from "./sources/live.js";
+import { createLiveSource } from "./sources/live.js?v=debug-browser-20260602e";
 import { createFileSource } from "./sources/file.js";
-import { mountHeader } from "./ui/header.js";
+import { mountHeader } from "./ui/header.js?v=debug-browser-20260602e";
 
 registerScene(pursuit3v1Scene);
 
@@ -22,12 +22,59 @@ export function createApp() {
 
   let latest = null;
   let latestVisual = null;
+  let liveEpisode = 0;
+  let lastHandledBoundaryKey = "";
   let mode = "live";
   let ui = null;
+  let sidebarInteracting = false;
+
+  function sameEpisode(a, b) {
+    return Number(a?.episode ?? 0) === Number(b?.episode ?? 0);
+  }
+
+  function boundaryKey(event, episode) {
+    return `${episode ?? ""}|${event ?? ""}`;
+  }
+
+  function shouldApplyLiveFrame(frame) {
+    const ep = Number(frame.episode ?? 0);
+    if (ep <= 0) return true;
+    if (ep > liveEpisode) liveEpisode = ep;
+    if (ep < liveEpisode) return false;
+    return true;
+  }
+
+  sidebar.addEventListener("pointerdown", () => {
+    sidebarInteracting = true;
+  });
+  window.addEventListener("pointerup", () => {
+    if (!sidebarInteracting) return;
+    sidebarInteracting = false;
+    refreshSidebar();
+  });
+  window.addEventListener("pointercancel", () => {
+    sidebarInteracting = false;
+  });
 
   function frameForDraw() {
-    if (latest?.positions?.length) return latest;
-    return latestVisual || latest;
+    if (!latest) return latestVisual;
+    if (latest.positions?.length) return latest;
+    if (latestVisual?.positions?.length && sameEpisode(latestVisual, latest)) {
+      return latestVisual;
+    }
+    return latest;
+  }
+
+  function refreshSidebar() {
+    const frame = frameForDraw();
+    if (!frame) return;
+    const scene = getScene(resolveSceneId(frame));
+    const scrollTop = sidebar.scrollTop;
+    sidebar.innerHTML = scene.renderSidebar?.(frameForDraw() || latest || frame, {
+      mode,
+      replayIndex: file.playback.index,
+    }) || "";
+    sidebar.scrollTop = scrollTop;
   }
 
   const live = createLiveSource({
@@ -62,15 +109,38 @@ export function createApp() {
       if (b) fitViewport(view, b, w, h);
     }
     scene.draw?.(ctx, { frame, trails, view, w, h });
-    sidebar.innerHTML = scene.renderSidebar?.(latest || frame, {
-      mode,
-      replayIndex: file.playback.index,
-    }) || "";
+    if (!sidebarInteracting) refreshSidebar();
   }
 
+  bus.on("live-boundary", ({ event, episode }) => {
+    const key = boundaryKey(event, episode);
+    if (key === lastHandledBoundaryKey) return;
+    lastHandledBoundaryKey = key;
+    const ep = Number(episode ?? 0);
+    if (ep > 0) liveEpisode = ep;
+    if (event === "episode_start") {
+      latestVisual = null;
+      resetObstacleCache();
+      trails.clear();
+      view.autoFit = true;
+    }
+  });
+
   bus.on("frame", ({ frame, source, replay }) => {
+    if (source === "live" && !shouldApplyLiveFrame(frame)) return;
+
     latest = frame;
-    if (frame?.positions?.length) latestVisual = frame;
+    const epMatch = !latestVisual || sameEpisode(latestVisual, frame);
+    if (frame?.positions?.length && (epMatch || frame.event !== "episode_end")) {
+      latestVisual = frame;
+    }
+    if (source === "live" && frame?.event === "episode_start") {
+      const ep = Number(frame.episode ?? 0);
+      if (ep > 0) liveEpisode = ep;
+      if (frame.positions?.length) {
+        latestVisual = frame;
+      }
+    }
     if (source === "live" || !replay?.seek) trails.onFrame(frame);
     if (source === "replay" && replay?.seek) trails.clear();
     if (source === "replay" && replay?.seek) {

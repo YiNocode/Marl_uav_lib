@@ -24,6 +24,9 @@ def build_pursuit_task_from_config(
     from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
         PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
     )
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex3 import (
+        PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx3,
+    )
 
     task_params = dict(task_cfg or {})
     task_params.pop("debug_browser", None)
@@ -34,6 +37,8 @@ def build_pursuit_task_from_config(
         return PursuitEvasion3v1TaskEx1(**task_params) if task_params else PursuitEvasion3v1TaskEx1()
     if task_name == "pursuit_evasion_3v1_ex2":
         return PursuitEvasion3v1TaskEx2(**task_params) if task_params else PursuitEvasion3v1TaskEx2()
+    if task_name == "pursuit_evasion_3v1_ex3":
+        return PursuitEvasion3v1TaskEx3(**task_params) if task_params else PursuitEvasion3v1TaskEx3()
     raise ValueError(f"Unsupported pursuit task name={task_name!r}")
 
 

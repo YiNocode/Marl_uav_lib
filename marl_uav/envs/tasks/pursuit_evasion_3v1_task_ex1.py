@@ -297,7 +297,7 @@ class PursuitEvasion3v1Task(BaseTask):
         init_pursuer_noise_z: float = 0.03,
         init_evader_x_range_ratio: tuple[float, float] = (0.12, 0.28),
         init_evader_y_range_ratio: float = 0.12,
-        init_evader_z_range: tuple[float, float] = (0.95, 1.10),
+        init_evader_z_range: tuple[float, float] = (2.0, 3.0),
         init_mean_dist_range_ratio: tuple[float, float] = (0.45, 0.75),
         evader_margin_xy_ratio: float = 0.25,
         evader_margin_z_ratio: float = 0.15,
@@ -360,6 +360,7 @@ class PursuitEvasion3v1Task(BaseTask):
         continuous_action_xy_ref: float = 0.25,
         continuous_action_yaw_ref: float = 0.01,
         continuous_action_z_ref: float = 0.15,
+        action_smoothness_penalty_scale: float = 0.0,
         **legacy_method_kwargs: Any,
     ) -> None:
         self.world_xy = float(world_xy)
@@ -544,6 +545,7 @@ class PursuitEvasion3v1Task(BaseTask):
         self.continuous_action_xy_ref = max(float(continuous_action_xy_ref), 1e-6)
         self.continuous_action_yaw_ref = max(float(continuous_action_yaw_ref), 1e-6)
         self.continuous_action_z_ref = max(float(continuous_action_z_ref), 1e-6)
+        self.action_smoothness_penalty_scale = max(float(action_smoothness_penalty_scale), 0.0)
         unused_method_keys = {
             "residual_control_gain",
             "residual_control_gain_final",
@@ -559,6 +561,32 @@ class PursuitEvasion3v1Task(BaseTask):
     # ---------------------------------------------------------------------
     # reset / init
     # ---------------------------------------------------------------------
+    def _initial_flight_z_bounds(self) -> tuple[float, float]:
+        safe_z_min = self.z_min + self.evader_margin_z + 0.02
+        safe_z_max = self.z_max - self.evader_margin_z - 0.02
+        if safe_z_min > safe_z_max:
+            safe_z_min, safe_z_max = self.z_min + 0.02, self.z_max - 0.02
+        init_z_low = float(np.clip(self.init_evader_z_range[0], safe_z_min, safe_z_max))
+        init_z_high = float(np.clip(self.init_evader_z_range[1], safe_z_min, safe_z_max))
+        if init_z_low > init_z_high:
+            init_z_low, init_z_high = init_z_high, init_z_low
+        return init_z_low, init_z_high
+
+    def _sample_initial_pursuer_z(self, rng: np.random.Generator) -> float:
+        init_z_low, init_z_high = self._initial_flight_z_bounds()
+        z_noise = max(float(self.init_pursuer_noise_z), 0.0)
+        z0_low = init_z_low + z_noise
+        z0_high = init_z_high - z_noise
+        if z0_low > z0_high:
+            z0_low = z0_high = 0.5 * (init_z_low + init_z_high)
+        return float(rng.uniform(z0_low, z0_high))
+
+    def _clip_positions_to_initial_z_band(self, pos: np.ndarray) -> np.ndarray:
+        p = np.asarray(pos, dtype=np.float32).copy()
+        init_z_low, init_z_high = self._initial_flight_z_bounds()
+        p[..., 2] = np.clip(p[..., 2], init_z_low, init_z_high)
+        return p.astype(np.float32)
+
     def sample_initial_conditions(self, num_agents: int, rng: np.random.Generator):
         """
         约定总 agent 数为 4：
@@ -573,7 +601,7 @@ class PursuitEvasion3v1Task(BaseTask):
         start_pos = np.zeros((num_agents, 3), dtype=np.float32)
         start_orn = np.zeros((num_agents, 3), dtype=np.float32)
 
-        z0 = float(np.clip(rng.uniform(0.95, 1.05), self.z_min + 0.03, self.z_max - 0.03))
+        z0 = self._sample_initial_pursuer_z(rng)
 
         pursuer_x = -self.init_pursuer_x_ratio * self.world_xy
         pursuer_y_spread = self.init_pursuer_y_spread_ratio * self.world_xy
@@ -593,6 +621,7 @@ class PursuitEvasion3v1Task(BaseTask):
         start_pos[pursuer_ids, :2] = base_pursuers[:, :2] + noise_xy
         start_pos[pursuer_ids, 2:] = base_pursuers[:, 2:] + noise_z
         start_pos[pursuer_ids] = self._clip_positions_inside(start_pos[pursuer_ids], margin_xy=0.02, margin_z=0.02)
+        start_pos[pursuer_ids] = self._clip_positions_to_initial_z_band(start_pos[pursuer_ids])
 
         evader_pos = self._sample_valid_evader_position(start_pos[pursuer_ids], rng)
         start_pos[evader_id] = evader_pos
@@ -684,10 +713,7 @@ class PursuitEvasion3v1Task(BaseTask):
         if evader_y_abs < 1e-6:
             evader_y_abs = min(0.05, safe_y_abs)
 
-        init_z_low = float(np.clip(self.init_evader_z_range[0], safe_z_min, safe_z_max))
-        init_z_high = float(np.clip(self.init_evader_z_range[1], safe_z_min, safe_z_max))
-        if init_z_low > init_z_high:
-            init_z_low, init_z_high = init_z_high, init_z_low
+        init_z_low, init_z_high = self._initial_flight_z_bounds()
 
         min_mean_dist = self.init_mean_dist_range_ratio[0] * self.world_xy
         max_mean_dist = self.init_mean_dist_range_ratio[1] * self.world_xy
@@ -1786,6 +1812,61 @@ class PursuitEvasion3v1Task(BaseTask):
         threat = float(max(w_px, w_nx, w_py, w_ny, w_pz, w_nz))
         return inward, threat
 
+    def _evader_obstacle_arrays(self, task_state: PursuitEvasion3v1TaskState) -> tuple[np.ndarray, np.ndarray]:
+        obs_xy = getattr(task_state, "obstacle_xy", None)
+        obs_r = getattr(task_state, "obstacle_r", None)
+        if obs_xy is None or obs_r is None:
+            return np.zeros((0, 2), dtype=np.float64), np.zeros(0, dtype=np.float64)
+        xy = np.asarray(obs_xy, dtype=np.float64).reshape(-1, 2)
+        rr = np.asarray(obs_r, dtype=np.float64).reshape(-1)
+        if xy.shape[0] == 0 or rr.shape[0] == 0:
+            return np.zeros((0, 2), dtype=np.float64), np.zeros(0, dtype=np.float64)
+        n = min(xy.shape[0], rr.shape[0])
+        return xy[:n], rr[:n]
+
+    def _evader_obstacle_clearance_radius(self) -> float:
+        hit = getattr(self, "_pursuer_obstacle_hit_radius", None)
+        if callable(hit):
+            return max(float(hit()), 0.05)
+        return max(0.05, 0.015 * float(self.world_xy))
+
+    def _evader_apf_obstacle_repulsion(
+        self,
+        evader_pos: np.ndarray,
+        task_state: PursuitEvasion3v1TaskState,
+    ) -> tuple[np.ndarray, float]:
+        """Cylinder obstacle repulsion; reuses evader APF pursuer gain and xy margin."""
+        obs_xy, obs_r = self._evader_obstacle_arrays(task_state)
+        if obs_xy.shape[0] == 0:
+            return np.zeros(3, dtype=np.float32), 0.0
+
+        e = np.asarray(evader_pos, dtype=np.float64).reshape(3)
+        e_xy = e[:2]
+        hit_r = self._evader_obstacle_clearance_radius()
+        rho0 = max(float(self.evader_margin_xy), 1e-3)
+        gain = float(self.evader_apf_pursuer_gain)
+
+        rep = np.zeros(3, dtype=np.float64)
+        threat = 0.0
+        for center, radius in zip(obs_xy, obs_r):
+            diff = e_xy - center.reshape(2)
+            dist_center = float(np.linalg.norm(diff))
+            surface_clear = dist_center - float(radius) - hit_r
+            t = self._wall_threat(surface_clear, rho0)
+            threat = max(threat, t)
+            if t <= 1e-8:
+                continue
+            if dist_center < 1e-6:
+                direction = np.array([1.0, 0.0], dtype=np.float64)
+            else:
+                direction = diff / dist_center
+            rho = max(surface_clear, 1e-3)
+            if rho < rho0:
+                mag = gain * (1.0 / rho - 1.0 / rho0) / (rho * rho)
+                rep[:2] += mag * direction
+
+        return rep.astype(np.float32), float(threat)
+
     def _compute_evader_setpoint(
         self,
         backend_state,
@@ -1820,6 +1901,7 @@ class PursuitEvasion3v1Task(BaseTask):
 
         f_p = np.asarray(self._evader_apf_pursuer_repulsion(evader_pos, pursuer_pos), dtype=np.float32)
         f_b, boundary_threat = self._evader_apf_boundary_repulsion(evader_pos)
+        f_o, obstacle_threat = self._evader_apf_obstacle_repulsion(evader_pos, task_state)
 
         center_pull = np.array(
             [
@@ -1832,6 +1914,7 @@ class PursuitEvasion3v1Task(BaseTask):
         center_pull = self._safe_normalize(center_pull)
 
         inward_hat = self._safe_normalize(f_b)
+        obstacle_hat = self._safe_normalize(f_o)
         safe_escape = f_p.copy()
         tangent = np.zeros(3, dtype=np.float32)
         if boundary_threat > 1e-6 and float(np.linalg.norm(inward_hat)) > 1e-8:
@@ -1844,18 +1927,26 @@ class PursuitEvasion3v1Task(BaseTask):
                 tangent = np.array([-inward_hat[1], inward_hat[0], 0.0], dtype=np.float32)
             tangent = self._safe_normalize(tangent)
 
+        if obstacle_threat > 1e-6 and float(np.linalg.norm(obstacle_hat)) > 1e-8:
+            proj_obs = float(np.dot(safe_escape, obstacle_hat))
+            if proj_obs < 0.0:
+                safe_escape = safe_escape - proj_obs * obstacle_hat
+
+        combined_threat = float(max(boundary_threat, obstacle_threat))
+
         desired = (
             safe_escape
             + float(self.evader_boundary_gain) * boundary_threat * inward_hat
             + float(self.evader_boundary_tangent_gain) * boundary_threat * tangent
             + float(self.evader_center_pull_gain) * (boundary_threat ** 2) * center_pull
+            + f_o
         )
 
         move_dir = self._safe_normalize(desired)
         if float(np.linalg.norm(move_dir)) < 1e-8:
             move_dir = self._safe_normalize(center_pull)
 
-        slowdown = 1.0 - (1.0 - float(self.evader_boundary_slowdown_min)) * boundary_threat
+        slowdown = 1.0 - (1.0 - float(self.evader_boundary_slowdown_min)) * combined_threat
         slowdown = float(np.clip(slowdown, self.evader_boundary_slowdown_min, 1.0))
 
         return np.array(

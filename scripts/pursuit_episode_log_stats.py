@@ -289,6 +289,20 @@ def _metrics_arrays_from_series(series: list[dict[str, Any]]) -> tuple[np.ndarra
     return cov, col, dang
 
 
+def _phi_max_array(series: list[dict[str, Any]]) -> np.ndarray:
+    if not series:
+        return np.zeros(0, dtype=np.float64)
+    from marl_uav.envs.tasks.pursuit_evasion_3v1_task import phi_max_from_c_cov
+
+    vals: list[float] = []
+    for row in series:
+        if "phi_max" in row:
+            vals.append(float(row["phi_max"]))
+        elif "C_cov" in row:
+            vals.append(phi_max_from_c_cov(float(row["C_cov"])))
+    return np.asarray(vals, dtype=np.float64)
+
+
 def _series_value_array(series: list[dict[str, Any]], key: str) -> np.ndarray:
     if not series:
         return np.zeros(0, dtype=np.float64)
@@ -654,7 +668,7 @@ def _episode_final_labels(
 ) -> dict[str, float]:
     min_dist_series = _episode_min_distance_series(traj_xyz)
     final_min_distance = float(min_dist_series[-1]) if min_dist_series.size else np.nan
-    final_phi_max = float(series[-1]["phi_max"]) if series else np.nan
+    final_phi_max = float(_phi_max_array(series)[-1]) if series else np.nan
     return {
         "final_min_distance": final_min_distance,
         "remaining_escape_angle_rad": final_phi_max,
@@ -677,7 +691,7 @@ def build_episode_analysis_table(bundle: EpisodeLogBundle) -> pd.DataFrame:
         traj_xyz = np.asarray(bundle.trajectories[i], dtype=np.float64)
         series = bundle.pursuit_series[i] if i < len(bundle.pursuit_series) else []
         cov, col, dang = _metrics_arrays_from_series(series)
-        phi_max = _series_value_array(series, "phi_max")
+        phi_max = _phi_max_array(series)
         fesc = _fesc_series_from_trajectory(traj_xyz)
         role_stability = _role_stability_series_from_trajectory(traj_xyz)
         record: dict[str, Any] = {

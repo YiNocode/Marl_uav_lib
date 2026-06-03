@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
 import numpy as np
@@ -11,6 +12,7 @@ from marl_uav.data.batch import Batch, EpisodeBatch
 from marl_uav.learners.base_learner import BaseLearner
 from marl_uav.runners.base_runner import BaseRunner
 from marl_uav.runners.rollout_worker import RolloutWorker
+from marl_uav.utils.bc_regression import append_train_log_row, compute_regression_metrics
 from marl_uav.utils.mappo_finetune import (
     apply_capture_adaptive_bc_kl,
     apply_learner_finetune_epoch,
@@ -146,6 +148,9 @@ class Trainer(BaseRunner):
         log_interval: int = 1,
         finetune_cfg: dict[str, Any] | None = None,
         default_entropy_coef: float | None = None,
+        train_log_path: Any | None = None,
+        bc_baseline_metrics: dict[str, float] | None = None,
+        early_stop_cfg: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """主训练循环。
 
@@ -171,6 +176,10 @@ class Trainer(BaseRunner):
         mac_policy = policy
         last_capture_rate: float | None = None
         peak_capture_rate = 0.0
+        best_eval_capture = 0.0
+        es_cfg = dict(early_stop_cfg or {})
+        min_retention = float(es_cfg.get("min_bc_retention", 0.95))
+        baseline = dict(bc_baseline_metrics or {})
 
         for epoch in range(num_epochs):
             apply_learner_finetune_epoch(self.learner, finetune, epoch)
@@ -192,6 +201,9 @@ class Trainer(BaseRunner):
             epoch_lens: list[int] = []
             epoch_losses: list[Dict[str, Any]] = []
             epoch_captures: list[float] = []
+            epoch_policy_bc_mse: list[float] = []
+            epoch_sce_dev: list[float] = []
+            epoch_prot_active: list[float] = []
             rollout_time = 0.0
             update_time = 0.0
             env_timing_totals: Dict[str, float] = {}
@@ -215,6 +227,12 @@ class Trainer(BaseRunner):
                 epoch_returns.append(float(info["episode_return"]))
                 epoch_lens.append(int(info["episode_len"]))
                 epoch_captures.append(1.0 if bool(info.get("capture", False)) else 0.0)
+                if "policy_bc_action_mse" in info:
+                    epoch_policy_bc_mse.append(float(info["policy_bc_action_mse"]))
+                if "action_deviation_from_sce" in info:
+                    epoch_sce_dev.append(float(info["action_deviation_from_sce"]))
+                if "capture_protection_active_rate" in info:
+                    epoch_prot_active.append(float(info["capture_protection_active_rate"]))
 
                 batch = self._postprocess_episode(episode)
                 loss_dict = self._call_learner(batch)
@@ -232,6 +250,7 @@ class Trainer(BaseRunner):
             if epoch_captures:
                 last_capture_rate = float(np.mean(epoch_captures))
                 peak_capture_rate = max(peak_capture_rate, last_capture_rate)
+                best_eval_capture = max(best_eval_capture, last_capture_rate)
 
             if log_interval > 0 and (epoch + 1) % log_interval == 0:
                 avg_ret = float(np.mean(epoch_returns)) if epoch_returns else 0.0
@@ -245,6 +264,35 @@ class Trainer(BaseRunner):
                 if epoch_losses:
                     for k in loss_mean:
                         loss_mean[k] /= len(epoch_losses)
+
+                log_row: Dict[str, Any] = {
+                    "epoch": epoch + 1,
+                    "train/avg_return": avg_ret,
+                    "train/capture_rate": last_capture_rate if last_capture_rate is not None else 0.0,
+                    "train/freeze_actor": float(
+                        getattr(self.learner, "_freeze_actor", False)
+                    ),
+                }
+                if "loss/bc_kl" in loss_mean:
+                    log_row["policy_bc_kl"] = loss_mean["loss/bc_kl"]
+                if "train/bc_kl_coef" in loss_mean:
+                    log_row["train/bc_kl_coef"] = loss_mean["train/bc_kl_coef"]
+                if epoch_policy_bc_mse:
+                    log_row["policy_bc_action_mse"] = float(np.mean(epoch_policy_bc_mse))
+                if epoch_sce_dev:
+                    log_row["action_deviation_from_sce"] = float(np.mean(epoch_sce_dev))
+                if epoch_prot_active:
+                    log_row["capture_protection_active_rate"] = float(np.mean(epoch_prot_active))
+                if baseline:
+                    reg = compute_regression_metrics(
+                        current={"capture_rate": last_capture_rate or 0.0},
+                        baseline=baseline,
+                        min_bc_retention=min_retention,
+                    )
+                    log_row.update(reg)
+                    log_row["best_eval_capture_rate"] = best_eval_capture
+                if train_log_path is not None:
+                    append_train_log_row(Path(train_log_path), log_row)
 
                 # 控制台打印
                 msg = (

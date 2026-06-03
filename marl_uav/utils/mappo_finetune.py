@@ -11,12 +11,10 @@ from torch import nn
 
 
 def resolve_mappo_finetune_cfg(train_cfg: dict[str, Any]) -> dict[str, Any]:
-    """Merge ``mappo_finetune`` with optional overrides under ``bc_warmstart``."""
-    finetune = dict(train_cfg.get("mappo_finetune") or {})
-    bc_cfg = dict(train_cfg.get("bc_warmstart") or {})
-    if bc_cfg.get("mappo_finetune"):
-        finetune = {**finetune, **dict(bc_cfg["mappo_finetune"])}
-    return finetune
+    """Merge ``mappo_finetune`` with optional overrides and capture_protection."""
+    from marl_uav.utils.experiment_pipeline import resolve_mappo_finetune_with_protection
+
+    return resolve_mappo_finetune_with_protection(train_cfg)
 
 
 def _protected_epochs_limit(finetune_cfg: dict[str, Any]) -> int:

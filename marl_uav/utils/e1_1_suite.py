@@ -21,6 +21,25 @@ def load_e2_obstacles_suite(path: Path | None = None) -> dict[str, Any]:
     return load_config(path or (root / E2_OBSTACLES_SUITE_REL))
 
 
+def resolve_suite_for_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Pick E1.1 vs E2 benchmark suite from experiment ``benchmark`` metadata."""
+    bench = cfg.get("benchmark") or {}
+    suite_name = str(bench.get("suite", "")).strip().upper()
+    scenario = str(bench.get("scenario", "")).strip()
+    if suite_name == "E2" or scenario in ("e2_obstacles", "e2"):
+        return load_e2_obstacles_suite()
+    return load_e1_1_suite()
+
+
+def suite_ref_for_cfg(cfg: dict[str, Any]) -> str:
+    bench = cfg.get("benchmark") or {}
+    suite_name = str(bench.get("suite", "")).strip().upper()
+    scenario = str(bench.get("scenario", "")).strip()
+    if suite_name == "E2" or scenario in ("e2_obstacles", "e2"):
+        return str(E2_OBSTACLES_SUITE_REL).replace("\\", "/")
+    return str(E1_1_SUITE_REL).replace("\\", "/")
+
+
 def is_benchmark_scenario_cfg(cfg: dict[str, Any], scenario: str) -> bool:
     bench = cfg.get("benchmark") or {}
     return str(bench.get("scenario", "")).strip() == str(scenario).strip()
@@ -40,7 +59,7 @@ def merge_rl_task_speed(
     if not is_rl_experiment_cfg(cfg):
         return cfg
 
-    suite = suite or load_e1_1_suite()
+    suite = suite or resolve_suite_for_cfg(cfg)
     expected_scenario = str(suite.get("scenario", "")).strip()
     bench = cfg.get("benchmark") or {}
     cfg_scenario = str(bench.get("scenario", "")).strip()
@@ -87,7 +106,7 @@ def resolve_speed_bounds(
     suite: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Planar speed caps for debug visualization and sanity checks."""
-    suite = suite or load_e1_1_suite()
+    suite = suite or resolve_suite_for_cfg(cfg)
     speed_root = dict(suite.get("speed") or {})
     ref_world = float(speed_root.get("reference_world_xy", 2.0))
     task = dict(cfg.get("task") or {})
@@ -104,9 +123,15 @@ def resolve_speed_bounds(
     if is_rl:
         merged = merge_rl_task_speed(cfg, suite=suite)
         task = dict(merged.get("task") or {})
+        if "pursuer_speed" not in task:
+            raise KeyError(
+                "RL config missing task.pursuer_speed after suite merge; "
+                f"check benchmark.method={((cfg.get('benchmark') or {}).get('method'))!r} "
+                f"in {suite_ref_for_cfg(cfg)}"
+            )
         base_pursuer = float(task["pursuer_speed"])
         source = "suite"
-        suite_ref = str(E1_1_SUITE_REL).replace("\\", "/")
+        suite_ref = suite_ref_for_cfg(cfg)
     else:
         if "pursuer_speed" not in task:
             raise ValueError("Non-RL E1.1 config must set task.pursuer_speed")

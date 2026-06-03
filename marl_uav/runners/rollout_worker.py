@@ -40,6 +40,9 @@ class RolloutWorker(BaseRunner):
         self._buffer: EpisodeBuffer | None = None
         self._logger = logger
         self._episode_idx = 0  # 用于 TensorBoard step（按 episode 计数）
+        self._capture_guard: Any | None = None
+        self._expert_get_actions_fn: Callable[..., np.ndarray] | None = None
+        self._bc_policy_for_diag: Any | None = None
 
     def _ensure_buffer(self) -> EpisodeBuffer:
         if self._buffer is None:
@@ -181,24 +184,25 @@ class RolloutWorker(BaseRunner):
                 PURSUIT_STRUCTURE_MEAN_LAST_STEPS）、obstacle_termination（ex2 撞柱终局）、
                 obstacle_xy / obstacle_r（本局柱布局，供可视化）
         """
-        # 先 reset 环境，确保 env 已初始化好 obs_dim/state_dim 等属性
-        obs_dict, env_info = self.env.reset(seed=seed)
-
         from marl_uav.utils.debug_browser import get_debug_browser_hub, publish_episode_marker
 
         hub = get_debug_browser_hub()
         if hub is not None:
             ep_idx = hub.next_episode()
             total_eps = int(getattr(hub, "_total_episodes", 1))
+
+        # reset 环境，确保 env 已初始化好 obs_dim/state_dim 等属性
+        obs_dict, env_info = self.env.reset(seed=seed)
+
+        if hub is not None:
             publish_episode_marker(
                 "episode_start",
                 episode=ep_idx,
                 total_episodes=total_eps,
                 seed=seed,
             )
-            if ep_idx == 1:
-                hub.arm_start_gate()
-                hub.wait_if_blocked()
+            hub.arm_start_gate()
+            hub.wait_if_blocked()
 
         # ex2 圆柱：reset 时柱布局固定整局，供评估轨迹画图与日志
         obstacle_xy_snapshot = env_info.get("obstacle_xy")
@@ -262,14 +266,56 @@ class RolloutWorker(BaseRunner):
         any_timeout = False
         any_obstacle_termination = False
         last_step_info: dict = {}
+        obstacle_aware_series: list[dict[str, Any]] = []
+
+        prev_min_dist = float(env_info.get("mean_goal_distance", 1e9))
+        policy_action_mse_acc: list[float] = []
+        policy_bc_kl_acc: list[float] = []
+        action_deviation_sce_acc: list[float] = []
 
         while True:
             actions, log_probs, values = self._select_actions(
                 obs_list, state, avail_actions
             )
+            actions_np = np.asarray(actions, dtype=np.float32)
+            if self._expert_get_actions_fn is not None:
+                sce_actions = np.asarray(
+                    self._expert_get_actions_fn(obs_list, state, avail_actions),
+                    dtype=np.float32,
+                )
+                action_deviation_sce_acc.append(
+                    float(np.mean((actions_np - sce_actions) ** 2))
+                )
+                guard = getattr(self, "_capture_guard", None)
+                if guard is not None:
+                    actions_np = guard.apply(
+                        actions_np,
+                        sce_actions,
+                        min_pursuer_evader_dist=prev_min_dist,
+                        sce_improves=True,
+                    )
+            if self._bc_policy_for_diag is not None:
+                try:
+                    import torch
+
+                    obs_arr = np.asarray(obs_list, dtype=np.float32)
+                    st_arr = np.asarray(state, dtype=np.float32)
+                    with torch.no_grad():
+                        out, _ = self._bc_policy_for_diag.forward(  # type: ignore[attr-defined]
+                            obs_arr[np.newaxis, ...],
+                            st_arr[np.newaxis, ...] if st_arr.ndim == 1 else st_arr,
+                            deterministic=True,
+                        )
+                        bc_a = out["actions"][0].detach().cpu().numpy()
+                    policy_action_mse_acc.append(float(np.mean((actions_np - bc_a) ** 2)))
+                except Exception:
+                    pass
+
             next_obs_dict, rewards, terminated, truncated, step_info = self.env.step(
-                actions
+                actions_np
             )
+            if "mean_goal_distance" in step_info:
+                prev_min_dist = float(step_info["mean_goal_distance"])
 
             last_step_info = step_info
             if "mean_goal_distance" in step_info:
@@ -300,6 +346,10 @@ class RolloutWorker(BaseRunner):
                 any_timeout = True
             if step_info.get("obstacle_terminated", False):
                 any_obstacle_termination = True
+
+            oad = step_info.get("obstacle_aware_diagnostics")
+            if isinstance(oad, dict):
+                obstacle_aware_series.append(oad)
 
             ps_step = step_info.get("pursuit_structure")
             if isinstance(ps_step, dict):
@@ -347,7 +397,7 @@ class RolloutWorker(BaseRunner):
             buf.add(
                 obs=obs_list,
                 state=state,
-                actions=actions,
+                actions=actions_np,
                 rewards=rewards,
                 next_obs=next_obs_list,
                 next_state=next_state,
@@ -400,6 +450,86 @@ class RolloutWorker(BaseRunner):
             cols = np.array([p[1] for p in tail], dtype=np.float64)
             info["mean_C_cov"] = float(np.mean(covs))
             info["mean_C_col"] = float(np.mean(cols))
+        if obstacle_aware_series:
+            keys = (
+                "assigned_pair_blocked_los",
+                "path_cache_hit_rate",
+                "num_replans_this_step",
+                "stale_path_rate",
+                "path_endpoint_error",
+                "path_min_clearance",
+                "path_tracking_error",
+                "turn_safety_active_rate",
+                "turn_arc_min_clearance",
+                "turn_boundary_min_clearance",
+                "turn_boundary_unsafe_rate",
+                "turn_angle_rad",
+                "slot_reachable_rate",
+                "mean_time_to_slot",
+                "max_time_to_slot",
+                "path_clearance_min",
+                "path_clearance_mean",
+                "path_risk_integral",
+                "slot_behind_obstacle_rate",
+                "los_blocked_slot_rate",
+                "unreachable_slot_rate",
+                "fallback_slot_selection_rate",
+                "assignment_switch_count",
+                "cbf_active",
+                "cbf_active_rate",
+                "cbf_active_consecutive_steps",
+                "cbf_correction_norm",
+                "nominal_action_norm",
+                "filtered_action_norm",
+                "local_obstacle_count",
+                "candidate_count",
+                "valid_candidate_count",
+                "local_planner_blocked",
+                "local_planner_time_ms",
+                "best_candidate_cost",
+                "best_candidate_speed",
+                "best_candidate_yaw_rate",
+                "min_predicted_clearance",
+                "assigned_slot_distance",
+                "selected_action_norm",
+                "cbf_filter_time_ms",
+                "decision_time_ms",
+            )
+            for key in keys:
+                vals = [
+                    float(row[key])
+                    for row in obstacle_aware_series
+                    if key in row and row[key] is not None
+                ]
+                if vals:
+                    info[f"mean_{key}"] = float(np.mean(vals))
+            if traj_list:
+                xy = np.asarray(traj_list, dtype=np.float64)[:, :3, :2]
+                seg_len = np.linalg.norm(np.diff(xy, axis=0), axis=2)
+                info["avg_path_length"] = float(np.sum(seg_len))
+            replans = [
+                float(row.get("num_replans_this_step", 0.0))
+                for row in obstacle_aware_series
+            ]
+            if replans:
+                info["mean_num_replans_this_step"] = float(np.mean(replans))
+
+        try:
+            from marl_uav.control.obstacle_aware_sce_baselines import episode_timing_summary
+
+            timing = episode_timing_summary(self.env)
+            if timing:
+                info.update(timing)
+                info.setdefault("avg_decision_ms", timing.get("avg_decision_ms", timing.get("decision_total_avg_ms")))
+                info.setdefault("p95_decision_ms", timing.get("p95_decision_ms", timing.get("decision_total_p95_ms")))
+                info.setdefault("max_decision_ms", timing.get("max_decision_ms", timing.get("decision_total_max_ms")))
+                info.setdefault("avg_los_ms", timing.get("los_check_avg_ms", 0.0))
+                info.setdefault("avg_assignment_ms", timing.get("assignment_avg_ms", 0.0))
+                info.setdefault("avg_path_planning_ms", timing.get("path_planning_avg_ms", 0.0))
+                info.setdefault("avg_cbf_ms", timing.get("cbf_filter_avg_ms", 0.0))
+        except Exception:
+            pass
+
         if mean_goal_distances:
             info["env_mean_goal_distance"] = float(np.mean(mean_goal_distances))
             info["env_final_goal_distance"] = mean_goal_distances[-1]
@@ -476,6 +606,16 @@ class RolloutWorker(BaseRunner):
                 episode_len=int(info.get("episode_len", 0)),
                 capture=bool(info.get("capture", False)),
             )
+
+        if policy_action_mse_acc:
+            info["policy_bc_action_mse"] = float(np.mean(policy_action_mse_acc))
+        if action_deviation_sce_acc:
+            info["action_deviation_from_sce"] = float(np.mean(action_deviation_sce_acc))
+        guard = getattr(self, "_capture_guard", None)
+        if guard is not None:
+            guard.episode_end(captured=bool(any_capture))
+            info.update(guard.stats.to_dict())
+            guard.reset_stats()
 
         return buf, info
 

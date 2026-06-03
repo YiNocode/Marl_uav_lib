@@ -52,19 +52,44 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
   let lastFrame = null;
   let lastControlState = null;
   let startRequested = false;
+  let liveRunArmed = false;
+  let lastLiveStep = null;
+  let lastLiveEpisode = 0;
+
+  function resolveLiveStep(frame) {
+    const ep = Number(frame.episode ?? 0);
+    if (ep > 0 && ep !== lastLiveEpisode) {
+      lastLiveEpisode = ep;
+      if (frame.event === "episode_start") lastLiveStep = 0;
+    }
+    if (frame.step !== undefined && frame.step !== null && frame.step !== "") {
+      lastLiveStep = Number(frame.step);
+      return lastLiveStep;
+    }
+    if (frame.event === "episode_end" && frame.episode_len !== undefined) {
+      lastLiveStep = Number(frame.episode_len);
+      return lastLiveStep;
+    }
+    if (frame.event === "episode_start") return 0;
+    return lastLiveStep;
+  }
 
   function syncStartControls(state = null) {
     if (state) lastControlState = state;
+    if (state?.run_armed) liveRunArmed = true;
     const st = lastControlState || {};
+    const completedEpisodes = Number(
+      st?.run_stats?.completed_episodes ?? lastFrame?.run_stats?.completed_episodes ?? 0,
+    );
     const atEpisodeHead =
       !startRequested &&
       mode === "live" &&
       lastFrame &&
       (lastFrame.event === "episode_start" || lastFrame.event === "reset") &&
-      Number(lastFrame.step ?? 0) === 0 &&
-      Number(st?.run_stats?.completed_episodes ?? lastFrame.run_stats?.completed_episodes ?? 0) === 0;
+      Number(lastFrame.step ?? 0) === 0;
     const serverWaiting = !!(st.awaiting_start || st.needs_start_click);
-    awaitingStart = !startRequested && (serverWaiting || atEpisodeHead);
+    const needsManualStart = serverWaiting || (atEpisodeHead && completedEpisodes === 0);
+    awaitingStart = !startRequested && needsManualStart;
     btnStart.classList.toggle("hidden", !awaitingStart);
     btnPause.classList.toggle("hidden", awaitingStart);
     setOverlay(awaitingStart ? "已加载初始帧，点击「开始」运行仿真" : "", awaitingStart);
@@ -117,6 +142,7 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
   btnStart.addEventListener("click", async () => {
     btnStart.disabled = true;
     startRequested = true;
+    liveRunArmed = true;
     syncStartControls();
     try {
       const state = await onStartLive();
@@ -233,9 +259,24 @@ export function mountHeader({ bus, live, file, onModeChange, onStartLive, onPaus
         startRequested = false;
       }
       syncStartControls();
-      stepStatus.textContent = `${source} step=${frame.step ?? "—"} event=${frame.event ?? "—"}`;
+      const stepVal = source === "live" ? resolveLiveStep(frame) : frame.step;
+      stepStatus.textContent = `${source} step=${stepVal ?? "—"} event=${frame.event ?? "—"}`;
       if (frame.event === "episode_start") {
+        startRequested = false;
+        lastLiveStep = 0;
         epStatus.textContent = `Episode ${frame.episode}/${frame.total_episodes || "?"}`;
+        if (source === "live") {
+          const epNum = Number(frame.episode ?? 0);
+          if (liveRunArmed && epNum > 1) {
+            live.syncControl({ start: true, paused: false }).then((state) => {
+              if (state) syncStartControls(state);
+            });
+          } else {
+            live.fetchControl().then((state) => {
+              if (state) syncStartControls(state);
+            });
+          }
+        }
       }
       if (frame.run_stats) updateRunStats(frame.run_stats);
       if (source === "replay" && frame.event === "episode_end" && frame.capture !== undefined) {

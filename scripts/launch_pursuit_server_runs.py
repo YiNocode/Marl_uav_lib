@@ -3,7 +3,6 @@
 This script covers three experiment groups:
 1. speed_ratio: base task with multiple speed ratios and multiple seeds
 2. role_assignment: ex1 task
-3. obstacles: ex2 task
 
 Default assumption for experiment 1:
 - ratio strings like "1:2" mean evader_speed : pursuer_speed = 1 : 2
@@ -36,10 +35,6 @@ def _dream_ex1_train_cfg() -> dict[str, Any]:
     return _load_yaml("configs/experiment/pursuit_evasion_dream_mappo_3v1.yaml")
 
 
-def _mappo_ex2_train_cfg() -> dict[str, Any]:
-    return _load_yaml("configs/experiment/pursuit_evasion_mappo_3v1_ex2.yaml")
-
-
 def _base_env_cfg() -> dict[str, Any]:
     with open(ROOT / "configs" / "env" / "pyflyt_3v1.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -50,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--experiment",
         required=True,
-        choices=("speed_ratio", "role_assignment", "obstacles"),
+        choices=("speed_ratio", "role_assignment"),
         help="Which experiment group to run.",
     )
     parser.add_argument(
@@ -188,23 +183,11 @@ def build_role_assignment_runs(args: argparse.Namespace) -> list[tuple[str, dict
     return runs
 
 
-def build_obstacle_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
-    runs: list[tuple[str, dict[str, Any]]] = []
-    for seed in args.seeds:
-        cfg = _mappo_ex2_train_cfg()
-        cfg["seed"] = int(seed)
-        run_name = f"pursuit_obstacles_seed{seed}"
-        runs.append((run_name, cfg, None, None))
-    return runs
-
-
 def build_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any], str | None, dict[str, Any] | None]]:
     if args.experiment == "speed_ratio":
         return build_speed_ratio_runs(args)
     if args.experiment == "role_assignment":
         return build_role_assignment_runs(args)
-    if args.experiment == "obstacles":
-        return build_obstacle_runs(args)
     raise ValueError(f"Unsupported experiment {args.experiment!r}")
 
 

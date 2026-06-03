@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,8 @@ import torch
 
 from marl_uav.control.expert_policy_factory import make_expert_get_actions_fn
 from marl_uav.learners.bc.bc_learner import BCLearner
+from marl_uav.utils.config import load_config
+from marl_uav.utils.eval_metrics import aggregate_eval_rows, episode_metrics_from_info
 from marl_uav.utils.logger import Logger
 
 
@@ -30,6 +34,18 @@ def set_policy_log_std(policy: Any, log_std: float) -> None:
         head.log_std.fill_(float(log_std))
 
 
+def _action_alignment_metrics(
+    policy_actions: np.ndarray, expert_actions: np.ndarray
+) -> tuple[float, float]:
+    diff = policy_actions.astype(np.float32) - expert_actions.astype(np.float32)
+    mse = float(np.mean(diff * diff))
+    pa = policy_actions.reshape(-1).astype(np.float64)
+    ea = expert_actions.reshape(-1).astype(np.float64)
+    denom = float(np.linalg.norm(pa) * np.linalg.norm(ea))
+    cos = float(np.dot(pa, ea) / denom) if denom > 1e-12 else 0.0
+    return mse, cos
+
+
 def evaluate_bc_clone(
     env: Any,
     policy: Any,
@@ -38,6 +54,9 @@ def evaluate_bc_clone(
     num_episodes: int = 20,
     seed: int = 0,
     deterministic: bool = True,
+    record_trajectory: bool = False,
+    terminal_window: int = 30,
+    control_hz: float = 50.0,
 ) -> dict[str, float]:
     """Evaluate cloned policy vs expert on the same env dynamics."""
     import torch
@@ -45,9 +64,14 @@ def evaluate_bc_clone(
     policy.eval()
     capture_cnt = 0
     oob_cnt = 0
+    collision_cnt = 0
+    timeout_cnt = 0
+    obstacle_cnt = 0
     returns: list[float] = []
     lens: list[int] = []
     action_mse: list[float] = []
+    action_cos: list[float] = []
+    episode_rows: list[dict[str, Any]] = []
 
     for ep in range(int(num_episodes)):
         ep_seed = int(seed) + ep
@@ -78,7 +102,9 @@ def evaluate_bc_clone(
                     deterministic=deterministic,
                 )
             policy_actions = _tensor_to_numpy(actor_out["actions"][0]).astype(np.float32)
-            action_mse.append(float(np.mean((policy_actions - expert_actions) ** 2)))
+            mse, cos = _action_alignment_metrics(policy_actions, expert_actions)
+            action_mse.append(mse)
+            action_cos.append(cos)
 
             _transition, rewards, terminated, truncated, info = env.step(policy_actions)
             ep_ret += float(sum(rewards))
@@ -94,18 +120,84 @@ def evaluate_bc_clone(
             capture_cnt += 1
         if any_oob:
             oob_cnt += 1
+        if bool(info.get("obstacle_termination", False)):
+            obstacle_cnt += 1
+        if bool(info.get("timeout", False)):
+            timeout_cnt += 1
+        if bool(info.get("collision", False) or info.get("has_collision", False)):
+            collision_cnt += 1
         returns.append(ep_ret)
         lens.append(steps)
+        if record_trajectory:
+            traj = np.asarray(info.get("trajectory", []), dtype=np.float32)
+            info_ep = dict(info)
+            info_ep.setdefault("capture", captured)
+            info_ep.setdefault("captured", captured)
+            row = episode_metrics_from_info(
+                info=info_ep,
+                trajectory=traj if traj.size else None,
+                terminal_window=terminal_window,
+                control_hz=control_hz,
+            )
+            row["bc_action_mse"] = float(np.mean(action_mse[-steps:]) if steps else 0.0)
+            row["bc_action_cosine_similarity"] = float(np.mean(action_cos[-steps:]) if steps else 0.0)
+            episode_rows.append(row)
 
     policy.train()
     n = max(int(num_episodes), 1)
-    return {
+    metrics = {
         "bc_eval/capture_rate": float(capture_cnt / n),
         "bc_eval/pursuer_oob_episode_rate": float(oob_cnt / n),
+        "bc_eval/collision_rate": float(collision_cnt / n),
+        "bc_eval/timeout_rate": float(timeout_cnt / n),
+        "bc_eval/obstacle_termination_rate": float(obstacle_cnt / n),
         "bc_eval/mean_episode_return": float(np.mean(returns)) if returns else 0.0,
         "bc_eval/mean_episode_len": float(np.mean(lens)) if lens else 0.0,
         "bc_eval/mean_action_mse": float(np.mean(action_mse)) if action_mse else 0.0,
+        "bc_eval/bc_action_mse": float(np.mean(action_mse)) if action_mse else 0.0,
+        "bc_eval/bc_action_cosine_similarity": float(np.mean(action_cos)) if action_cos else 0.0,
     }
+    if episode_rows:
+        agg = aggregate_eval_rows(episode_rows)
+        tw = int(terminal_window)
+        for key in (
+            f"D_ang_last{tw}",
+            f"C_cov_last{tw}",
+            f"C_col_last{tw}",
+            f"max_escape_gap_last{tw}",
+        ):
+            if key in agg and np.isfinite(agg[key]):
+                metrics[f"bc_eval/{key}"] = float(agg[key])
+        metrics["_bc_eval_episode_rows"] = episode_rows  # type: ignore[assignment]
+    return metrics
+
+
+def write_bc_eval_summary_csv(path: Path, metrics: dict[str, float], *, seed: int, method: str = "bc") -> None:
+    """Write one-row BC evaluation summary for paper tables."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row: dict[str, Any] = {
+        "method": method,
+        "seed": seed,
+        "bc_train_loss": metrics.get("bc_train_loss", ""),
+        "bc_val_loss": metrics.get("bc_val_loss", ""),
+        "bc_action_mse": metrics.get("bc_eval/bc_action_mse", metrics.get("bc_eval/mean_action_mse", "")),
+        "bc_action_cosine_similarity": metrics.get(
+            "bc_eval/bc_action_cosine_similarity", ""
+        ),
+        "bc_eval_capture_rate": metrics.get("bc_eval/capture_rate", ""),
+        "bc_eval_collision_rate": metrics.get("bc_eval/collision_rate", ""),
+        "bc_eval_timeout_rate": metrics.get("bc_eval/timeout_rate", ""),
+        "bc_eval_obstacle_termination_rate": metrics.get("bc_eval/obstacle_termination_rate", ""),
+    }
+    tw = 30
+    for suffix in (f"D_ang_last{tw}", f"C_cov_last{tw}", f"C_col_last{tw}", f"max_escape_gap_last{tw}"):
+        k = f"bc_eval/{suffix}"
+        if k in metrics:
+            row[f"bc_eval_{suffix}"] = metrics[k]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
 
 
 def _resolve_bc_task_cfg(train_cfg: dict[str, Any]) -> dict[str, Any] | None:
@@ -259,8 +351,12 @@ def run_bc_warmstart(
         f"episodes_per_epoch={episodes_per_epoch} batch_size={batch_size}"
     )
 
+    val_ratio = float(bc_cfg.get("val_holdout_ratio", 0.0) or 0.0)
+    val_ratio = float(np.clip(val_ratio, 0.0, 0.5))
     rng = np.random.default_rng(seed)
     global_step = 0
+    last_train_loss = 0.0
+    last_val_loss = 0.0
     for epoch in range(num_epochs):
         obs_bt, state_bt, actions_bt = collect_expert_transitions(
             bc_env,
@@ -270,11 +366,20 @@ def run_bc_warmstart(
         )
         total_steps = int(obs_bt.shape[0])
         perm = rng.permutation(total_steps)
+        if val_ratio > 0.0 and total_steps > 1:
+            n_val = max(1, int(total_steps * val_ratio))
+            val_idx = perm[:n_val]
+            train_idx = perm[n_val:]
+        else:
+            val_idx = np.array([], dtype=np.int64)
+            train_idx = perm
 
         epoch_metrics: dict[str, float] = {}
         num_updates = 0
-        for start in range(0, total_steps, batch_size):
-            idx = perm[start : start + batch_size]
+        for start in range(0, int(train_idx.size), batch_size):
+            idx = train_idx[start : start + batch_size]
+            if idx.size == 0:
+                continue
             metrics = bc_learner.update_batch(
                 obs=obs_bt[idx],
                 state=state_bt[idx],
@@ -285,8 +390,21 @@ def run_bc_warmstart(
             num_updates += 1
             global_step += 1
 
+        if val_idx.size > 0:
+            vm = bc_learner.eval_batch(
+                obs=obs_bt[val_idx],
+                state=state_bt[val_idx],
+                expert_actions=actions_bt[val_idx],
+            )
+            last_val_loss = float(vm.get("bc/total_loss", 0.0))
+        else:
+            last_val_loss = float(epoch_metrics.get("bc/total_loss", 0.0))
+
         if num_updates > 0:
             epoch_metrics = {k: v / num_updates for k, v in epoch_metrics.items()}
+        last_train_loss = float(epoch_metrics.get("bc/total_loss", 0.0))
+        epoch_metrics["bc_train_loss"] = last_train_loss
+        epoch_metrics["bc_val_loss"] = last_val_loss
         epoch_metrics["bc/num_transitions"] = float(total_steps)
 
         if logger is not None:
@@ -314,18 +432,57 @@ def run_bc_warmstart(
     print(f"[bc] saved warm-start checkpoint: {ckpt_path}")
 
     eval_episodes = int(bc_cfg.get("eval_episodes", 20))
+    exp_cfg = dict(train_cfg.get("experiment") or {})
+    eval_seeds = exp_cfg.get("eval_seeds") or [seed + 80_000]
+    holdout_seed = int(eval_seeds[0]) if eval_seeds else seed + 80_000
+    env_cfg: dict[str, Any] = {}
+    if env_cfg_path is not None:
+        env_cfg = load_config(env_cfg_path)
+    control_hz = float((env_cfg.get("backend", {}) or {}).get("control_hz", 50))
+
     eval_metrics = evaluate_bc_clone(
         env,
         policy,
         expert_get_actions,
         num_episodes=eval_episodes,
-        seed=seed + 80_000,
+        seed=holdout_seed,
         deterministic=True,
+        record_trajectory=True,
+        terminal_window=int(exp_cfg.get("terminal_window", 30)),
+        control_hz=control_hz,
     )
-    print("[bc] post-train eval: " + " ".join(f"{k}={v:.4f}" for k, v in eval_metrics.items()))
+    eval_metrics["bc_train_loss"] = last_train_loss
+    eval_metrics["bc_val_loss"] = last_val_loss
+    print(
+        "[bc] post-train eval: "
+        + " ".join(
+            f"{k}={v:.4f}"
+            for k, v in eval_metrics.items()
+            if not k.startswith("_") and isinstance(v, (int, float))
+        )
+    )
     if logger is not None:
-        logger.log_dict(eval_metrics, step=num_epochs, prefix="bc")
+        log_eval = {k: v for k, v in eval_metrics.items() if not k.startswith("_")}
+        logger.log_dict(log_eval, step=num_epochs, prefix="bc")
         logger.flush()
+
+    if bool(bc_cfg.get("write_bc_eval_csv", True)):
+        csv_path = results_dir / "bc_eval_summary.csv"
+        write_bc_eval_summary_csv(csv_path, eval_metrics, seed=seed)
+        ep_rows = eval_metrics.pop("_bc_eval_episode_rows", None)
+        if ep_rows:
+            ep_path = results_dir / "bc_eval_episodes.csv"
+            with open(ep_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=list(ep_rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(ep_rows)
+        metrics_path = results_dir / "metrics.json"
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {k: v for k, v in eval_metrics.items() if not k.startswith("_")},
+                f,
+                indent=2,
+            )
 
     min_capture = bc_cfg.get("min_eval_capture_rate")
     if min_capture is not None and eval_metrics["bc_eval/capture_rate"] < float(min_capture):

@@ -1,0 +1,141 @@
+# E2 debug trajectory_planner:
+# manifold generator + OT slot allocator + sampled obstacle avoidance + path debug.
+
+benchmark:
+  suite: E2
+  scenario: e2_obstacles
+  method: trajectory_planner
+  description: Debug trajectory planner with obstacle-aware manifold slots and local sampled avoidance.
+
+env: configs/env/e2_pyflyt_3v1_obstacles_heuristic.yaml
+train_results_dir: results/e2_obstacles_pyflyt/training/trajectory_planner
+
+task:
+  pursuer_speed: 0.25
+  evader_speed: 0.25
+  pursuer_vertical_speed: 0.30
+  min_pursuer_sep: 0.6
+  progress_reward_scale: 0.0
+  min_progress_reward_scale: 0.0
+  time_penalty: 0.0
+  capture_bonus: 0.0
+  collision_penalty: 0.0
+  oob_penalty: 30.0
+  evader_boundary_gain: 0.8
+  mean_progress_reward_scale: 0.0
+  capture_bonus_team: 0.0
+  capture_bonus_individual: 0.0
+  progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
+  structure_reward_scale: 0.0
+  structure_improve_scale: 0.0
+  structure_hold_reward_scale: 0.0
+  role_progress_reward_scale: 0.0
+  radial_compress_reward_scale: 0.0
+  radial_overshoot_penalty_scale: 0.0
+  encirclement_capture_enabled: true
+  encirclement_capture_hold_steps: 8
+  encirclement_capture_max_gap_deg: 135.0
+  encirclement_capture_radius_scale: 1.6
+  encirclement_capture_min_dist_scale: 1.5
+  encirclement_capture_radius_margin_scale: 0.35
+  role_features_enabled: false
+  role_assignment_mode: entropic_ot
+  ot_epsilon: 0.05
+  ot_epsilon_scale: 0.25
+  ot_sinkhorn_iterations: 25
+  manifold_target_phase: 0.0
+  manifold_target_radius_scale: 1.0
+  manifold_contraction_rate: 0.01
+  manifold_structure_gate_scale: 0.75
+  assignment_inertia_margin: 0.05
+  obstacle_manifold_top_k: 4
+  obstacle_manifold_influence_radius_scale: 2.5
+  obstacle_manifold_clearance_margin_scale: 0.35
+  obstacle_manifold_fourier_scale: 0.45
+  obstacle_manifold_fourier_order: 2
+  obstacle_manifold_bump_sigma_deg: 24.0
+  obstacle_manifold_bump_scale: 0.35
+  obstacle_manifold_max_extra_radius_scale: 1.5
+  manifold_curve_num_samples: 121
+  debug_browser:
+    enabled: true
+    host: 127.0.0.1
+    port: 8765
+    open_browser: true
+    playback_speed: 1.0
+
+method:
+  name: trajectory_planner
+
+trajectory_planner:
+  altitude_floor_margin: 0.25
+  altitude_ceiling_margin: 0.10
+  boundary_margin: 0.60
+  boundary_alpha: 3.0
+  manifold_replan_curve_tol: 0.05
+  manifold_replan_rho_tol: 0.001
+  lookahead_dist: 3.0
+  path_waypoint_lookahead: 1.0
+  path_target_replan_tol: 0.25
+  path_replan_period: 5
+  manifold_generator:
+    curve_num_samples: 121
+  slot_allocator:
+    ot_epsilon: 0.05
+    ot_epsilon_scale: 0.25
+    ot_sinkhorn_iterations: 25
+    assignment_inertia_margin: 0.05
+    los_penalty: 5.0
+    safety_margin: 0.30
+    uav_radius: 0.15
+    w_reach_block: 50.0
+    w_clearance: 1.0
+    w_path: 0.5
+    boundary_margin: 0.30
+    reachability:
+      horizon_s: 1.5
+      dt: 0.1
+      vmax: 0.25
+      omega_max: 1.0
+      num_yaw_samples: 11
+      speed_samples: [1.0, 0.75, 0.5, 0.25]
+      min_turn_radius: 0.25
+      lookahead_dist: 1.5
+      uav_radius: 0.15
+      safety_margin: 0.30
+      query_extra_margin: 0.20
+      use_candidate_rollout_filter: true
+      w_goal: 1.0
+      w_heading: 0.2
+      w_obstacle: 5.0
+      collision_large_penalty: 1000000.0
+      amax_xy: 0.5
+  obstacle_avoidance:
+    horizon_s: 3
+    dt: 0.1
+    vmax: 0.25
+    omega_max: 1.0
+    num_yaw_samples: 21
+    speed_samples: [1.0, 0.6, 0.3, 0.0]
+    min_turn_radius: 0.25
+    lookahead_dist: 3.0
+    uav_radius: 0.15
+    safety_margin: 0.60
+    query_extra_margin: 0.50
+    boundary_margin: 0.30
+    collision_large_penalty: 1000000.0
+    w_goal: 0.5
+    w_heading: 1.0
+    w_obstacle: 20.0
+    w_smooth: 0.1
+    w_speed: 0.0
+    w_vel_smooth: 0.0
+    amax_xy: 0.5
+    fallback_zero_if_blocked: true
+    use_candidate_rollout_filter: true
+
+seed: 101
+eval_episodes: 200

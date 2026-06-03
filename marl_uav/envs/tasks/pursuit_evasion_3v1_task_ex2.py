@@ -57,7 +57,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         pursuer_obstacle_hit_radius_ratio: float = 0.015,
         init_clearance_extra_ratio: float = 0.02,
         obstacle_collision_penalty: float = 15.0,
-        obstacle_grid_spacing: float = 4.0,
+        obstacle_grid_spacing: float = 8.0,
         max_obstacle_place_trials: int = 8000,
         obstacle_manifold_top_k: int = 4,
         obstacle_manifold_influence_radius_scale: float = 2.5,
@@ -210,10 +210,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         if evader_y_abs < 1e-6:
             evader_y_abs = min(0.05, safe_y_abs)
 
-        init_z_low = float(np.clip(self.init_evader_z_range[0], safe_z_min, safe_z_max))
-        init_z_high = float(np.clip(self.init_evader_z_range[1], safe_z_min, safe_z_max))
-        if init_z_low > init_z_high:
-            init_z_low, init_z_high = init_z_high, init_z_low
+        init_z_low, init_z_high = self._initial_flight_z_bounds()
 
         min_mean_dist = self.init_mean_dist_range_ratio[0] * self.world_xy
         max_mean_dist = self.init_mean_dist_range_ratio[1] * self.world_xy
@@ -248,7 +245,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         start_pos = np.zeros((num_agents, 3), dtype=np.float32)
         start_orn = np.zeros((num_agents, 3), dtype=np.float32)
 
-        z0 = float(np.clip(rng.uniform(0.95, 1.05), self.z_min + 0.03, self.z_max - 0.03))
+        z0 = self._sample_initial_pursuer_z(rng)
 
         pursuer_x = -self.init_pursuer_x_ratio * self.world_xy
         pursuer_y_spread = self.init_pursuer_y_spread_ratio * self.world_xy
@@ -276,6 +273,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
             start_pos[pursuer_ids, :2] = base_pursuers[:, :2] + noise_xy
             start_pos[pursuer_ids, 2:] = base_pursuers[:, 2:] + noise_z
             start_pos[pursuer_ids] = self._clip_positions_inside(start_pos[pursuer_ids], margin_xy=0.02, margin_z=0.02)
+            start_pos[pursuer_ids] = self._clip_positions_to_initial_z_band(start_pos[pursuer_ids])
 
             p_xy = start_pos[pursuer_ids, :2]
             if not bool(np.all(self._xy_clear_of_obstacles(p_xy, obstacle_xy, obstacle_r, clear))):
@@ -318,6 +316,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
         start_pos[pursuer_ids, :2] = base_pursuers[:, :2] + noise_xy
         start_pos[pursuer_ids, 2:] = base_pursuers[:, 2:] + noise_z
         start_pos[pursuer_ids] = self._clip_positions_inside(start_pos[pursuer_ids], margin_xy=0.02, margin_z=0.02)
+        start_pos[pursuer_ids] = self._clip_positions_to_initial_z_band(start_pos[pursuer_ids])
         start_pos[evader_id] = super()._sample_valid_evader_position(start_pos[pursuer_ids], rng)
         init_dists = np.linalg.norm(
             start_pos[pursuer_ids] - start_pos[evader_id][None, :],

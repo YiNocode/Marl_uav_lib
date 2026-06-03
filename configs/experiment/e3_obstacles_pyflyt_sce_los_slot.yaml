@@ -1,0 +1,97 @@
+# E3 — deployable sce_los_slot (LOS assignment only, no path planner).
+
+benchmark:
+  suite: E3
+  scenario: e3_obstacles
+  method: sce_los_slot
+  description: Real-time SCE with LOS-aware OT assignment and direct slot tracking.
+
+env: configs/env/e3_pyflyt_3v1_obstacles_heuristic.yaml
+train_results_dir: results/e3_obstacles_pyflyt/training/sce_los_slot
+
+task:
+  name: pursuit_evasion_3v1_ex3
+  evader_sharp_turn_enabled: true
+  init_random_bias_enabled: true
+  pursuer_speed: 0.25
+  evader_speed: 0.25
+  pursuer_vertical_speed: 0.30
+  min_pursuer_sep: 0.6
+  progress_reward_scale: 0.0
+  min_progress_reward_scale: 0.0
+  time_penalty: 0.0
+  capture_bonus: 0.0
+  collision_penalty: 0.0
+  oob_penalty: 30.0
+  evader_boundary_gain: 0.8
+  mean_progress_reward_scale: 0.0
+  capture_bonus_team: 0.0
+  capture_bonus_individual: 0.0
+  progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
+  structure_reward_scale: 0.0
+  structure_improve_scale: 0.0
+  structure_hold_reward_scale: 0.0
+  role_progress_reward_scale: 0.0
+  radial_compress_reward_scale: 0.0
+  radial_overshoot_penalty_scale: 0.0
+  encirclement_capture_enabled: true
+  encirclement_capture_hold_steps: 8
+  encirclement_capture_max_gap_deg: 135.0
+  encirclement_capture_radius_scale: 1.6
+  encirclement_capture_min_dist_scale: 1.5
+  encirclement_capture_radius_margin_scale: 0.35
+  role_features_enabled: false
+  role_assignment_mode: entropic_ot
+  ot_epsilon: 0.05
+  ot_epsilon_scale: 0.25
+  ot_sinkhorn_iterations: 25
+  manifold_target_phase: 0.0
+  manifold_target_radius_scale: 1.0
+  manifold_contraction_rate: 0.01
+  manifold_structure_gate_scale: 0.75
+  assignment_inertia_margin: 0.05
+  obstacle_manifold_top_k: 4
+  obstacle_manifold_influence_radius_scale: 2.5
+  obstacle_manifold_clearance_margin_scale: 0.35
+  obstacle_manifold_fourier_scale: 0.45
+  obstacle_manifold_fourier_order: 2
+  obstacle_manifold_bump_sigma_deg: 24.0
+  obstacle_manifold_bump_scale: 0.35
+  obstacle_manifold_max_extra_radius_scale: 1.5
+  manifold_curve_num_samples: 121
+
+sce_los_slot:
+  xy_gain: 0.25
+  z_gain: 0.20
+  yaw_gain: 0.25
+  yaw_align_min_speed: 0.25
+  runtime_rates:
+    control_hz: 50
+    manifold_update_hz: 10
+    assignment_update_hz: 5
+    path_replan_hz: 1
+    cbf_hz: 50
+  reachability:
+    enabled: true
+    mode: structure_los
+    safety_margin: 0.3
+    uav_radius: 0.15
+    switch_penalty: 0.2
+    structure_assignment:
+      w_cov: 1.0
+      w_col: 1.0
+      w_ang: 1.0
+      structure_scale: 10.0
+      w_travel: 0.0
+    pair_reachability:
+      exclude_unreachable: true
+    assignment:
+      method: permute
+    slot_projection:
+      enabled: false
+
+seed: 101
+eval_episodes: 200

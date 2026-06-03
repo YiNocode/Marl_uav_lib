@@ -12,6 +12,7 @@ from marl_uav.envs.tasks.navigation_task import NavigationTask
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task import (
     PursuitEvasion3v1Task,
     compute_pursuit_structure_metrics_3v1,
+    pursuit_structure_from_cached_metrics,
 )
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex1 import (
     PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx1,
@@ -20,9 +21,17 @@ from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
     PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
     PursuitEvasion3v1TaskEx2State,
 )
+from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex3 import (
+    PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx3,
+)
 
-# 追逃 3v1：标准任务与 ex1（扩展观测）/ ex2（圆柱障碍）共用同一套 env 诊断与离散动作数
-PURSUIT_EVASION_3V1_TASK_TYPES = (PursuitEvasion3v1Task, PursuitEvasion3v1TaskEx1, PursuitEvasion3v1TaskEx2)
+# 追逃 3v1：标准任务与 ex1（扩展观测）/ ex2（圆柱障碍）/ ex3（急转+随机初值）共用同一套 env 诊断
+PURSUIT_EVASION_3V1_TASK_TYPES = (
+    PursuitEvasion3v1Task,
+    PursuitEvasion3v1TaskEx1,
+    PursuitEvasion3v1TaskEx2,
+    PursuitEvasion3v1TaskEx3,
+)
 
 
 class PyFlytAviaryEnv(BaseEnv):
@@ -109,6 +118,15 @@ class PyFlytAviaryEnv(BaseEnv):
         self.step_count = 0
         self._episode_return = 0.0
         self._episode_len = 0
+        self._obstacle_aware_diagnostics = None
+        ctrl = getattr(self, "_obstacle_aware_ctrl_state", None)
+        if ctrl is not None:
+            ctrl.reset_episode()
+        deploy = getattr(self, "_deploy_sce_state", None)
+        if deploy is not None:
+            deploy.reset_episode()
+        self._obstacle_aware_last_step_count = -1
+        self._deploy_sce_last_step = -1
 
         obs = self.task.build_obs(backend_state, self.task_state)
         state = self.task.build_state(backend_state, self.task_state)
@@ -130,11 +148,11 @@ class PyFlytAviaryEnv(BaseEnv):
                 getattr(self.task_state, "latest_structure_metrics", None), dtype=np.float32
             ).reshape(-1)
             if latest_struct.shape[0] == 3:
-                info["pursuit_structure"] = {
-                    "C_cov": float(latest_struct[0]),
-                    "C_col": float(latest_struct[1]),
-                    "D_ang": float(latest_struct[2]),
-                }
+                info["pursuit_structure"] = pursuit_structure_from_cached_metrics(
+                    float(latest_struct[0]),
+                    float(latest_struct[1]),
+                    float(latest_struct[2]),
+                )
             else:
                 lin_pos0 = backend_state.states[:, 3, :]
                 ps = lin_pos0[self.task_state.pursuer_ids]
@@ -220,6 +238,15 @@ class PyFlytAviaryEnv(BaseEnv):
         # 追逃任务需要检测“是否在本步新发生捕获”
         prev_captured = bool(getattr(self.task_state, "captured", False))
 
+        if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
+            acts = np.asarray(actions, dtype=np.float32)
+            if acts.ndim == 2 and acts.shape[0] == len(self.task_state.pursuer_ids):
+                self.task_state._current_pursuer_actions = acts.copy()
+            elif acts.ndim == 1 and acts.size >= len(self.task_state.pursuer_ids):
+                self.task_state._current_pursuer_actions = acts.reshape(
+                    len(self.task_state.pursuer_ids), -1
+                ).copy()
+
         rewards = self.task.compute_rewards(
             self.prev_backend_state,
             backend_state,
@@ -227,6 +254,10 @@ class PyFlytAviaryEnv(BaseEnv):
         )
         self._episode_return += float(np.sum(rewards))
         self._episode_len += 1
+        if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
+            cur_a = getattr(self.task_state, "_current_pursuer_actions", None)
+            if cur_a is not None:
+                self.task_state.prev_pursuer_actions = np.asarray(cur_a, dtype=np.float32).copy()
         t_after_rewards = time.perf_counter()
         terminated, truncated = self.task.compute_terminated_truncated(
             backend_state,
@@ -333,6 +364,12 @@ class PyFlytAviaryEnv(BaseEnv):
             "reward_time_penalty": reward_time_penalty,
             "reward_reach_bonus": reward_reach_bonus,
             "reward_collision_penalty": reward_collision_penalty,
+            "reward_capture": 0.0,
+            "reward_capture_progress": reward_progress + reward_time_penalty,
+            "reward_slot_tracking": 0.0,
+            "reward_structure": 0.0,
+            "reward_smooth": 0.0,
+            "reward_bc_anchor": 0.0,
             "terminated": bool(terminated),
             "truncated": bool(truncated),
             "termination_reason": termination_reason,
@@ -341,15 +378,21 @@ class PyFlytAviaryEnv(BaseEnv):
         }
 
         if isinstance(self.task, PURSUIT_EVASION_3V1_TASK_TYPES):
+            rc = getattr(self.task_state, "last_reward_components", None)
+            if isinstance(rc, dict):
+                info["reward_components"] = dict(rc)
+                for k, v in rc.items():
+                    if k.startswith("reward_"):
+                        info[k] = float(v)
             latest_struct = np.asarray(
                 getattr(self.task_state, "latest_structure_metrics", None), dtype=np.float32
             ).reshape(-1)
             if latest_struct.shape[0] == 3:
-                pursuit_structure = {
-                    "C_cov": float(latest_struct[0]),
-                    "C_col": float(latest_struct[1]),
-                    "D_ang": float(latest_struct[2]),
-                }
+                pursuit_structure = pursuit_structure_from_cached_metrics(
+                    float(latest_struct[0]),
+                    float(latest_struct[1]),
+                    float(latest_struct[2]),
+                )
             else:
                 ps = lin_pos[self.task_state.pursuer_ids]
                 pe = lin_pos[self.task_state.evader_id]
@@ -379,6 +422,10 @@ class PyFlytAviaryEnv(BaseEnv):
                 info["obstacle_r"] = np.asarray(
                     self.task_state.obstacle_r, dtype=np.float32
                 ).copy()
+
+        oad = getattr(self, "_obstacle_aware_diagnostics", None)
+        if isinstance(oad, dict):
+            info["obstacle_aware_diagnostics"] = dict(oad)
 
         t_after_info = time.perf_counter()
         info["timing"] = {

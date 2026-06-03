@@ -20,6 +20,7 @@ from marl_uav.envs.backends.genesis_backend import GenesisBackend
 from marl_uav.envs.factories import build_pursuit_task_from_config
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task import (
     compute_pursuit_structure_metrics_3v1,
+    pursuit_structure_from_cached_metrics,
 )
 from marl_uav.envs.tasks.pursuit_evasion_3v1_task_ex2 import (
     PursuitEvasion3v1Task as PursuitEvasion3v1TaskEx2,
@@ -293,11 +294,11 @@ class GenesisVecEnvManager:
             dtype=np.float32,
         ).reshape(-1)
         if latest_struct.shape[0] == 3:
-            pursuit_structure = {
-                "C_cov": float(latest_struct[0]),
-                "C_col": float(latest_struct[1]),
-                "D_ang": float(latest_struct[2]),
-            }
+            pursuit_structure = pursuit_structure_from_cached_metrics(
+                float(latest_struct[0]),
+                float(latest_struct[1]),
+                float(latest_struct[2]),
+            )
         else:
             pursuit_structure = compute_pursuit_structure_metrics_3v1(pursuer_pos, evader_pos)
 

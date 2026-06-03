@@ -1,0 +1,30 @@
+obs:
+  obstacle_slots: 16
+  include_prev_action: true
+reward:
+  w_progress: 2.0
+  w_alive: 0.01
+  w_time: 0.02
+  w_clearance: 0.15
+  w_arrive: 5.0
+  w_collision: 15.0
+  w_oob: 10.0
+  w_smooth: 0.05
+  w_team_collision: 5.0
+  progress_dist_norm: 2.0
+  arrive_dist: 0.25
+  clearance_margin: 0.30
+  success_all_agents: false
+train:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  lr: 0.0003
+  value_coef: 0.5
+  entropy_coef: 0.01
+  entropy_coef_final: 0.001
+  max_grad_norm: 0.5
+  ppo_epochs: 4
+  rollout_steps: 128
+  hidden_sizes: [256, 256]
+  target_kl: 0.03

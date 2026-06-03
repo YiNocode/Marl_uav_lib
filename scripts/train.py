@@ -24,6 +24,14 @@ from marl_uav.runners.bc_pretrainer import (
     run_bc_warmstart,
     set_policy_log_std,
 )
+from marl_uav.control.expert_policy_factory import make_expert_get_actions_fn
+from marl_uav.utils.bc_regression import append_train_log_row, compute_regression_metrics, write_metrics_json
+from marl_uav.utils.capture_action_guard import CaptureActionGuard
+from marl_uav.utils.experiment_pipeline import (
+    resolve_capture_protection_cfg,
+    should_attach_bc_anchor,
+    skip_mappo_training,
+)
 from marl_uav.utils.mappo_finetune import (
     attach_bc_anchor_to_learner,
     resolve_mappo_finetune_cfg,
@@ -366,7 +374,7 @@ def main() -> None:
 
     finetune_cfg = resolve_mappo_finetune_cfg(train_cfg)
     default_entropy_coef = float(getattr(learner, "entropy_coef", 0.0))
-    if uses_bc_finetune(finetune_cfg) and isinstance(learner, MAPPOLearner):
+    if should_attach_bc_anchor(train_cfg) and isinstance(learner, MAPPOLearner):
         log_std_after = bc_cfg.get("log_std_after_bc")
         attach_bc_anchor_to_learner(
             learner,
@@ -378,6 +386,41 @@ def main() -> None:
         if hasattr(learner, "apply_finetune_epoch"):
             learner.apply_finetune_epoch(finetune_cfg, epoch=0)
 
+    import shutil
+    import yaml
+
+    config_snapshot = results_dir / "config.yaml"
+    with open(config_snapshot, "w", encoding="utf-8") as f:
+        yaml.safe_dump(train_cfg, f, sort_keys=False, allow_unicode=True)
+
+    bc_baseline_metrics: dict[str, float] = {}
+    metrics_json_path = results_dir / "metrics.json"
+    if (results_dir / "bc_eval_summary.csv").is_file():
+        import csv
+
+        with open(results_dir / "bc_eval_summary.csv", newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+            if rows:
+                row0 = rows[0]
+                bc_baseline_metrics = {
+                    "capture_rate": float(row0.get("bc_eval_capture_rate", 0) or 0),
+                    "collision_rate": float(row0.get("bc_eval_collision_rate", 0) or 0),
+                }
+    if bc_ckpt_path is not None and bc_ckpt_path.is_file():
+        shutil.copy2(bc_ckpt_path, results_dir / "bc_checkpoint.pt")
+
+    cp_cfg = resolve_capture_protection_cfg(train_cfg)
+    write_metrics_json(
+        metrics_json_path,
+        {
+            "capture_protection_mode": str(
+                finetune_cfg.get("_capture_protection_mode", cp_cfg.get("mode", "bc_kl_guard"))
+            ),
+            "capture_protection_enabled": bool(finetune_cfg.get("_capture_protection_enabled", cp_cfg.get("enabled"))),
+            "bc_baseline": bc_baseline_metrics,
+        },
+    )
+
     if args.bc_only:
         tb_logger.flush()
         tb_logger.close()
@@ -387,7 +430,33 @@ def main() -> None:
             print(f"[bc-only] finished. checkpoint={bc_ckpt_path}")
         return
 
+    if skip_mappo_training(train_cfg):
+        print("[train] pipeline stage skips MAPPO fine-tuning (bc_only / bc_eval / num_epochs=0).")
+        tb_logger.flush()
+        tb_logger.close()
+        return
+
     rollout_worker = RolloutWorker(env=env, policy=mac, logger=tb_logger)
+    if bc_cfg.get("enabled") and bc_cfg.get("expert"):
+        expert_name = str(bc_cfg.get("expert"))
+        expert_params = dict(bc_cfg.get(expert_name) or bc_cfg.get("expert_params") or {})
+        rollout_worker._expert_get_actions_fn = make_expert_get_actions_fn(
+            env, expert_name, expert_params
+        )
+        mode = str(cp_cfg.get("mode", "bc_kl_guard"))
+        if bool(cp_cfg.get("enabled")) and mode in ("action_guard", "mixed_action"):
+            rollout_worker._capture_guard = CaptureActionGuard(
+                mode=mode,
+                enabled=True,
+                near_capture_dist=float(cp_cfg.get("near_capture_dist", 2.0)),
+                max_action_deviation=float(cp_cfg.get("max_action_deviation", 0.5)),
+                protect_if_sce_action_improves_capture=bool(
+                    cp_cfg.get("protect_if_sce_action_improves_capture", True)
+                ),
+                mix_beta=float(cp_cfg.get("mix_beta", 0.5)),
+            )
+    if hasattr(learner, "bc_policy_anchor") and learner.bc_policy_anchor is not None:
+        rollout_worker._bc_policy_for_diag = learner.bc_policy_anchor
     vec_env_manager = None
     if num_envs > 1:
         if use_genesis_native_vec:
@@ -470,7 +539,12 @@ def main() -> None:
             )
         if num_envs > 1:
             run_kw["profile_timing"] = profile_timing
-        train_metrics = trainer.run(**run_kw)
+        train_metrics = trainer.run(
+            **run_kw,
+            train_log_path=results_dir / "train_log.csv",
+            bc_baseline_metrics=bc_baseline_metrics,
+            early_stop_cfg=dict(train_cfg.get("early_stop") or {}),
+        )
     finally:
         if vec_env_manager is not None:
             vec_env_manager.close()

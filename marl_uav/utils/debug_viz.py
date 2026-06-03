@@ -17,6 +17,10 @@ _VIZ_DEFAULTS: dict[str, bool] = {
     "fixed_ring_targets": False,
     "fixed_ring_curve": False,
     "obstacles": True,
+    "path_tracking": False,
+    "speed_diagnostics": False,
+    "candidate_slots": False,
+    "manifold_only": False,
 }
 
 
@@ -57,6 +61,87 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             role_allocation=True,
             ot_details=True,
         )
+    if "trajectory_planner" in cfg:
+        return _profile(
+            "trajectory_planner",
+            manifold_curve=True,
+            slot_targets=True,
+            manifold_only=True,
+        )
+    if "slot_exec_mappo" in cfg:
+        return _profile(
+            "slot_exec_mappo",
+            manifold_curve=True,
+            slot_targets=True,
+            manifold_only=True,
+        )
+    if "sce_los_slot" in cfg:
+        return _profile(
+            "sce_los_slot",
+            manifold_curve=True,
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+        )
+    if "sce_turn_radius_slot" in cfg:
+        return _profile(
+            "sce_turn_radius_slot",
+            manifold_curve=True,
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+            speed_diagnostics=True,
+        )
+    if "sce_cached_path_cbf_slot" in cfg:
+        return _profile(
+            "sce_cached_path_cbf_slot",
+            manifold_curve=True,
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+            path_tracking=True,
+            speed_diagnostics=True,
+        )
+    if "sce_path_cbf_slot" in cfg:
+        return resolve_viz_profile({**cfg, "sce_cached_path_cbf_slot": {}})
+    if "sce_cached_path_slot" in cfg:
+        return _profile(
+            "sce_cached_path_slot",
+            manifold_curve=True,
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+            path_tracking=True,
+            speed_diagnostics=True,
+        )
+    if "sce_path_slot" in cfg:
+        return resolve_viz_profile({**cfg, "sce_cached_path_slot": {}})
+    if "sce_reachability_cbf_slot" in cfg:
+        return _profile(
+            "sce_reachability_cbf_slot",
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+            path_tracking=True,
+            speed_diagnostics=True,
+            candidate_slots=True,
+        )
+    if "sce_reachability_slot" in cfg:
+        return _profile(
+            "sce_reachability_slot",
+            slot_targets=True,
+            role_allocation=True,
+            ot_details=True,
+            structure_metrics=True,
+            path_tracking=True,
+            speed_diagnostics=True,
+            candidate_slots=True,
+        )
     if "fixed_ring" in cfg:
         return _profile(
             "fixed_ring",
@@ -87,6 +172,16 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         return resolve_viz_profile({**cfg, "hungarian_slot": {}})
     if method in ("ot_slot", "ot"):
         return resolve_viz_profile({**cfg, "ot_slot": {}})
+    if method in ("trajectory_planner", "traj_planner"):
+        return resolve_viz_profile({**cfg, "trajectory_planner": {}})
+    if method in ("slot_exec_mappo", "slot_exec"):
+        return resolve_viz_profile({**cfg, "slot_exec_mappo": {}})
+    if method in ("sce_reachability_slot", "reachability_slot"):
+        return resolve_viz_profile({**cfg, "sce_reachability_slot": {}})
+    if method in ("sce_reachability_cbf_slot", "reachability_cbf_slot"):
+        return resolve_viz_profile({**cfg, "sce_reachability_cbf_slot": {}})
+    if method in ("sce_turn_radius_slot", "turn_radius_slot", "sce_turn_radius"):
+        return resolve_viz_profile({**cfg, "sce_turn_radius_slot": {}})
     if method in ("fixed_ring", "fixedring"):
         return resolve_viz_profile({**cfg, "fixed_ring": {}})
     if method in ("pure_pursuit", "purepursuit"):

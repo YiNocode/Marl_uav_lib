@@ -1,0 +1,20 @@
+# E3 obstacle-rich PyFlyt 3v1 backend config (RL / tighter yaw box).
+
+scenario_config: configs/env/e3_obstacle_scenario.yaml
+
+env_id: pyflyt_navigation
+action_space: continuous
+action_dim: 4
+action_low: [-0.25, -0.25, -0.01, -0.15]
+action_high: [0.25, 0.25, 0.01, 0.15]
+
+backend:
+  num_agents: 4
+  drone_type: quadx
+  render: False
+  physics_hz: 240
+  control_hz: 60
+  world_scale: 5.0
+  flight_mode: 6
+  seed_offset: 0
+  drone_options: {}

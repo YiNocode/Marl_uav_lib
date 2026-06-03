@@ -65,7 +65,7 @@ task:
   manifold_contraction_rate: 0.01
   manifold_structure_gate_scale: 0.75
 
-seed: 101
+seed: 103
 num_envs: 8
 num_epochs: 3000
 rollout_steps: 1024

@@ -24,11 +24,8 @@ from marl_uav.utils.stdio import configure_utf8_stdio, utf8_subprocess_env
 configure_utf8_stdio()
 
 
-DEFAULT_MAPPO_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_mappo_3v1_ex2.yaml"
 DEFAULT_DREAM_PYFLYT_EX1_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1.yaml"
-DEFAULT_DREAM_PYFLYT_EX2_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2.yaml"
 DEFAULT_DREAM_GENESIS_EX1_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_genesis.yaml"
-DEFAULT_DREAM_GENESIS_EX2_CFG = ROOT / "configs" / "experiment" / "pursuit_evasion_dream_mappo_3v1_ex2_genesis.yaml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,19 +34,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=str,
         default="",
-        help="Top-level train config path. Defaults to Dream ex2 config unless --variant=mappo.",
-    )
-    p.add_argument(
-        "--variant",
-        choices=("dream", "mappo"),
-        default="dream",
-        help="Pick the default config when --config is omitted.",
-    )
-    p.add_argument(
-        "--experiment",
-        choices=("ex1", "ex2"),
-        default="ex1",
-        help="Pick the Dream-MAPPO pursuit experiment when --config is omitted.",
+        help="Top-level train config path. Defaults to the Dream ex1 config.",
     )
     p.add_argument(
         "--backend",
@@ -106,11 +91,9 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def resolve_config(args: argparse.Namespace) -> Path:
     if args.config:
         return (ROOT / args.config).resolve()
-    if args.variant == "mappo":
-        return DEFAULT_MAPPO_CFG
     if args.backend == "genesis":
-        return DEFAULT_DREAM_GENESIS_EX1_CFG if args.experiment == "ex1" else DEFAULT_DREAM_GENESIS_EX2_CFG
-    return DEFAULT_DREAM_PYFLYT_EX1_CFG if args.experiment == "ex1" else DEFAULT_DREAM_PYFLYT_EX2_CFG
+        return DEFAULT_DREAM_GENESIS_EX1_CFG
+    return DEFAULT_DREAM_PYFLYT_EX1_CFG
 
 
 def make_monitor_args(args: argparse.Namespace) -> argparse.Namespace:
