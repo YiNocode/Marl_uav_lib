@@ -1,0 +1,121 @@
+benchmark:
+  suite: E2
+  scenario: obstacle_field
+  method: fixed_ring_bc_curriculum_mappo
+env: configs/env/pyflyt_obstacles.yaml
+algo: configs/algo/mappo.yaml
+model: configs/model/centralized_critic.yaml
+train_results_dir: results/e2_obstacle_field_pyflyt/training/fixed_ring_bc_curriculum_mappo/spacing_10
+task:
+  pursuer_speed: 0.25
+  evader_speed: 0.25
+  pursuer_vertical_speed: 0.3
+  min_pursuer_sep: 0.6
+  progress_reward_scale: 2.0
+  min_progress_reward_scale: 1.0
+  mean_progress_reward_scale: 2.0
+  time_penalty: 0.001
+  capture_bonus: 200.0
+  capture_bonus_team: 30.0
+  capture_bonus_individual: 10.0
+  collision_penalty: 2.0
+  obstacle_collision_penalty: 15.0
+  oob_penalty: 30.0
+  evader_boundary_gain: 0.8
+  progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
+  structure_reward_scale: 0.1
+  structure_improve_scale: 0.08
+  structure_hold_reward_scale: 0.02
+  role_progress_reward_scale: 0.05
+  radial_compress_reward_scale: 0.5
+  radial_overshoot_penalty_scale: 0.2
+  encirclement_capture_enabled: true
+  encirclement_capture_hold_steps: 8
+  encirclement_capture_max_gap_deg: 135.0
+  encirclement_capture_radius_scale: 1.6
+  encirclement_capture_min_dist_scale: 1.5
+  encirclement_capture_radius_margin_scale: 0.35
+  role_features_enabled: false
+  obstacle_grid_spacing: 10.0
+bc_warmstart:
+  enabled: true
+  expert: fixed_ring_apf
+  checkpoint_name: bc_pretrained.pt
+  skip_if_exists: false
+  load_for_mappo: true
+  log_std_after_bc: -1.5
+  loss_mode: mse
+  nll_coef: 0.0
+  num_epochs: 50
+  episodes_per_epoch: 16
+  batch_size: 1024
+  lr: 0.0005
+  max_grad_norm: 0.5
+  mse_coef: 1.0
+  update_epochs_per_batch: 3
+  val_holdout_ratio: 0.1
+  dagger_iterations: 4
+  dagger_episodes_per_iter: 8
+  dagger_update_epochs: 4
+  eval_episodes: 20
+  min_eval_capture_rate: 0.3
+  write_bc_eval_csv: true
+  task:
+    obstacle_grid_spacing: 10.0
+  fixed_ring_apf:
+    ring_radius: 1.6
+    phase: 0.0
+    assignment: fixed
+    boundary_margin: 0.3
+    boundary_alpha: 3.0
+    obstacle_avoidance:
+      vmax: 0.25
+      omega_max: 1.0
+      uav_radius: 0.15
+      safety_margin: 0.6
+      position_kp: 1.0
+      obstacle_influence_radius: 2.0
+      obstacle_barrier_gain: 1.5
+      obstacle_repulse_gain: 0.35
+mappo_finetune:
+  protected_epochs: 5
+  deterministic_rollout_epochs: 5
+  freeze_actor_epochs: 2
+  bc_kl_coef: 0.05
+  bc_kl_coef_ramp_epochs: 20
+  bc_kl_coef_end: 0.005
+  entropy_coef_start: 0.0
+  entropy_coef_end: 0.001
+  entropy_coef_ramp_epochs: 20
+  actor_lr_scale_start: 0.25
+  actor_lr_scale_end: 1.0
+  actor_lr_ramp_epochs: 20
+  ppo_epochs_during_protection: 1
+capture_protection:
+  enabled: true
+  mode: bc_kl_guard
+curriculum:
+  enabled: true
+  parameter: task.obstacle_grid_spacing
+  values:
+  - 10.0
+  - 9.0
+  - 8.0
+  - 7.0
+  - 6.0
+  - 5.0
+  seed: 101
+  num_epochs_per_stage: 200
+  rollout_steps_per_stage: 2048
+  eval_episodes_per_stage: 20
+  stage_results_dir_template: results/e2_obstacle_field_pyflyt/training/fixed_ring_bc_curriculum_mappo/spacing_{value}
+  final_checkpoint: results/e2_obstacle_field_pyflyt/training/fixed_ring_bc_curriculum_mappo/spacing_5/checkpoints/{seed}/latest.pt
+seed: 101
+num_epochs: 200
+rollout_steps: 2048
+num_envs: 1
+log_interval: 1
+eval_episodes: 20

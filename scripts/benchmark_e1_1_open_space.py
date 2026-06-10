@@ -36,7 +36,12 @@ from marl_uav.control.geometric_pursuit_baselines import (
     make_ot_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
+from marl_uav.control.obstacle_apf_baselines import (
+    make_fixed_ring_apf_get_actions_fn,
+    make_pure_pursuit_apf_get_actions_fn,
+)
 from marl_uav.control.sce_controller import make_sce_get_actions_fn
+from marl_uav.control.trajectory_planner import make_trajectory_planner_get_actions_fn
 from marl_uav.envs.factories import build_env_from_config
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.utils.checkpoint import load_checkpoint
@@ -303,9 +308,15 @@ def _episode_metrics(
         "capture_step": capture_step if captured else "",
         "capture_time_s": capture_time_s,
         "collision": int(bool(info.get("collision", False))),
+        "any_collision": int(bool(info.get("collision", False)) or bool(info.get("obstacle_termination", False))),
+        "obstacle_termination": int(bool(info.get("obstacle_termination", False))),
         "timeout": int(bool(info.get("timeout", False))),
         "out_of_bounds": int(bool(info.get("out_of_bounds", False))),
         "pursuer_oob": int(bool(info.get("pursuer_oob", False))),
+        "avg_decision_ms": float(info.get("avg_decision_ms", math.nan)),
+        "p95_decision_ms": float(info.get("p95_decision_ms", math.nan)),
+        "max_decision_ms": float(info.get("max_decision_ms", math.nan)),
+        "control_hz": float(control_hz),
         f"C_cov_last{terminal_window}": _window_mean(cov, terminal_window),
         f"C_col_last{terminal_window}": _window_mean(col, terminal_window),
         f"D_ang_last{terminal_window}": _window_mean(dang, terminal_window),
@@ -365,7 +376,11 @@ def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
     if getattr(env, "obs_dim", None) is None or getattr(env, "state_dim", None) is None:
         env.reset(seed=seed)
 
-    if "fixed_ring" in cfg:
+    if "fixed_ring_apf" in cfg:
+        get_actions = make_fixed_ring_apf_get_actions_fn(env, **dict(cfg.get("fixed_ring_apf", {}) or {}))
+    elif "pure_pursuit_apf" in cfg:
+        get_actions = make_pure_pursuit_apf_get_actions_fn(env, **dict(cfg.get("pure_pursuit_apf", {}) or {}))
+    elif "fixed_ring" in cfg:
         get_actions = make_fixed_ring_get_actions_fn(env, **dict(cfg.get("fixed_ring", {}) or {}))
     elif "pure_pursuit" in cfg:
         get_actions = make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
@@ -377,10 +392,15 @@ def _build_heuristic_worker(cfg_path: Path, seed: int) -> RolloutWorker:
         get_actions = make_ot_slot_get_actions_fn(env, **dict(cfg.get("ot_slot", {}) or {}))
     elif "sce" in cfg:
         get_actions = make_sce_get_actions_fn(env, **dict(cfg.get("sce", {}) or {}))
+    elif "trajectory_planner" in cfg:
+        get_actions = make_trajectory_planner_get_actions_fn(
+            env, **dict(cfg.get("trajectory_planner", {}) or {})
+        )
     else:
         raise ValueError(
             f"Heuristic config {cfg_path.relative_to(ROOT)} must define one of "
-            "fixed_ring, pure_pursuit, oracle_slot, hungarian_slot, ot_slot, or sce."
+            "fixed_ring_apf, pure_pursuit_apf, fixed_ring, pure_pursuit, oracle_slot, "
+            "hungarian_slot, ot_slot, sce, or trajectory_planner."
         )
     return RolloutWorker(env=env, policy=object(), get_actions_fn=get_actions)
 
@@ -437,6 +457,10 @@ def summarize(records: list[dict[str, Any]], *, terminal_window: int) -> tuple[l
         f"F_esc_last{terminal_window}",
         f"role_stability_last{terminal_window}",
         f"role_instability_last{terminal_window}",
+        "avg_decision_ms",
+        "p95_decision_ms",
+        "max_decision_ms",
+        "control_hz",
     ]
 
     by_seed_rows: list[dict[str, Any]] = []
@@ -449,6 +473,8 @@ def summarize(records: list[dict[str, Any]], *, terminal_window: int) -> tuple[l
             "num_episodes": len(sub),
             "capture_rate": _finite_mean(sub, "captured"),
             "collision_rate": _finite_mean(sub, "collision"),
+            "any_collision_rate": _finite_mean(sub, "any_collision"),
+            "obstacle_collision_rate": _finite_mean(sub, "obstacle_termination"),
             "timeout_rate": _finite_mean(sub, "timeout"),
             "out_of_bounds_rate": _finite_mean(sub, "out_of_bounds"),
         }
@@ -466,6 +492,8 @@ def summarize(records: list[dict[str, Any]], *, terminal_window: int) -> tuple[l
             "num_episodes": len(sub),
             "capture_rate": _finite_mean(sub, "captured"),
             "collision_rate": _finite_mean(sub, "collision"),
+            "any_collision_rate": _finite_mean(sub, "any_collision"),
+            "obstacle_collision_rate": _finite_mean(sub, "obstacle_termination"),
             "timeout_rate": _finite_mean(sub, "timeout"),
             "out_of_bounds_rate": _finite_mean(sub, "out_of_bounds"),
         }
@@ -577,14 +605,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--suite-config",
         type=str,
-        default="configs/benchmark/e1_1_open_space_suite.yaml",
+        default="configs/benchmark/e1_open_space_suite.yaml",
     )
     p.add_argument(
         "--mode",
         choices=("generate-configs", "pretrain", "train", "eval", "all"),
         default="eval",
     )
-    p.add_argument("--methods", nargs="*", default=["pure_pursuit"])
+    p.add_argument("--methods", nargs="*", default=None)
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument(
         "--checkpoint",

@@ -41,7 +41,7 @@ from marl_uav.runners.evaluator import Evaluator
 from marl_uav.runners.rollout_worker import RolloutWorker
 from marl_uav.runners.trainer import Trainer
 from marl_uav.runners.vecenv_trainer import VecEnvTrainer
-from marl_uav.utils.checkpoint import CheckpointManager
+from marl_uav.utils.checkpoint import CheckpointManager, load_checkpoint
 from marl_uav.utils.config import load_config
 from marl_uav.utils.e1_1_suite import merge_rl_task_speed
 from marl_uav.utils.device import resolve_train_device
@@ -203,6 +203,15 @@ def resolve_train_results_dir(root: Path, train_cfg: dict[str, Any], train_confi
     return p.resolve() if p.is_absolute() else (root / p).resolve()
 
 
+def resolve_optional_checkpoint(root: Path, train_cfg: dict[str, Any]) -> Path | None:
+    """Resolve an optional checkpoint used to initialize training."""
+    raw = train_cfg.get("initial_checkpoint", train_cfg.get("resume_from_checkpoint"))
+    if not raw:
+        return None
+    p = Path(str(raw))
+    return p if p.is_absolute() else (root / p)
+
+
 def resolve_vec_rollout_steps(
     *,
     rollout_steps: int,
@@ -350,6 +359,13 @@ def main() -> None:
     learner, trainer_kwargs = build_learner(algo_cfg_path, policy=policy_core)
     ckpt_dir = results_dir / "checkpoints" / str(seed)
     ckpt_mgr = CheckpointManager(ckpt_dir, best_metric="train/avg_return", mode="max")
+
+    initial_checkpoint = resolve_optional_checkpoint(root, train_cfg)
+    if initial_checkpoint is not None:
+        if not initial_checkpoint.is_file():
+            raise FileNotFoundError(f"initial checkpoint not found: {initial_checkpoint}")
+        load_checkpoint(initial_checkpoint, learner)
+        print(f"[train] initialized learner from checkpoint: {initial_checkpoint}")
 
     bc_cfg = dict(train_cfg.get("bc_warmstart") or {})
     bc_enabled = bool(bc_cfg.get("enabled", False)) and not bool(args.skip_bc)

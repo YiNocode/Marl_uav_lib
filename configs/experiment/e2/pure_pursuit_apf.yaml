@@ -1,0 +1,50 @@
+benchmark:
+  suite: E2
+  scenario: obstacle_field
+  method: pure_pursuit_apf
+
+env: configs/env/pyflyt_obstacles.yaml
+train_results_dir: results/e2_obstacle_field_pyflyt/training/pure_pursuit_apf
+
+task:
+  pursuer_speed: 0.25
+  evader_speed: 0.4
+  pursuer_vertical_speed: 0.30
+  min_pursuer_sep: 0.6
+  progress_reward_scale: 0.0
+  min_progress_reward_scale: 0.0
+  time_penalty: 0.0
+  capture_bonus: 0.0
+  collision_penalty: 0.0
+  oob_penalty: 30.0
+  evader_boundary_gain: 0.8
+  mean_progress_reward_scale: 0.0
+  capture_bonus_team: 0.0
+  capture_bonus_individual: 0.0
+  progress_dist_norm: 2.0
+  continuous_action_xy_ref: 0.25
+  continuous_action_yaw_ref: 0.25
+  continuous_action_z_ref: 0.15
+  structure_reward_scale: 0.0
+  structure_improve_scale: 0.0
+  structure_hold_reward_scale: 0.0
+  role_progress_reward_scale: 0.0
+  radial_compress_reward_scale: 0.0
+  radial_overshoot_penalty_scale: 0.0
+  encirclement_capture_enabled: false
+
+pure_pursuit_apf:
+  boundary_margin: 0.30
+  boundary_alpha: 3.0
+  obstacle_avoidance:
+    vmax: 0.25
+    omega_max: 1.0
+    uav_radius: 0.15
+    safety_margin: 0.60
+    position_kp: 1.0
+    obstacle_influence_radius: 2.0
+    obstacle_barrier_gain: 1.5
+    obstacle_repulse_gain: 0.35
+
+seed: 101
+eval_episodes: 200

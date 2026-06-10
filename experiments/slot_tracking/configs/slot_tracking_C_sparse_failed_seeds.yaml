@@ -1,0 +1,226 @@
+benchmark:
+  name: slot_tracking_C_sparse_failed_seeds
+  num_seeds: 5
+  seeds: [5199, 5209, 5260, 5174, 5155]
+  scenario_groups: [C]
+  scenario_names: [sparse_random_obstacles]
+  speed_levels: [0.8]
+  max_cases_per_group: null
+  controllers:
+    - existing
+    - global_path_pure_pursuit
+    - pd_raw
+    - pure_pursuit_raw
+    - nominal_raw
+    - pd_safety
+    - pure_pursuit_safety
+    - nominal_safety
+  initial_state:
+    mode: fixed
+    position_xy: [-6.0, -2.8]
+    velocity_xy: [0.0, 0.0]
+    clip_to_valid: true
+    min_boundary_margin: 0.35
+    per_scenario:
+      sparse_random_obstacles:
+        position_xy: [-6.0, -2.8]
+
+world:
+  world_xy: 20.0
+  z: 1.0
+  boundary_margin: 0.0
+
+dynamics:
+  dt: 0.05
+  episode_steps: 500
+  uav_vmax: 1.0
+  uav_amax: 2.0
+  uav_radius: 0.15
+  nominal_controller_vmax: 1.0
+  slot_tolerance: 0.6
+  lost_threshold: 1.5
+  safety_margin: 0.25
+  inter_agent_min_distance: 0.45
+
+success:
+  final_error_threshold: 0.7
+  steady_state_error_threshold: 0.85
+  p95_error_threshold: 3.0
+  max_lost_ratio: 0.30
+  lock_threshold: 0.7
+  lock_window: 40
+  reacquisition_threshold: 0.9
+  reacquisition_max_steps: 120
+  realtime_p95_ms: 10.0
+  min_obstacle_clearance_p5: 0.25
+
+failure_classifier:
+  near_boundary_distance: 1.5
+  outward_velocity_ratio_threshold: 0.30
+  stuck_progress_threshold: 0.2
+  stuck_clearance_threshold: 0.35
+  stuck_ratio_threshold: 0.15
+  no_progress_window_fraction: 0.4
+  oscillation_error_threshold: 0.8
+  oscillation_std_threshold: 0.4
+  oscillation_clearance_threshold: 0.7
+  oscillation_near_obstacle_ratio: 0.25
+  oscillation_action_reversal_ratio: 0.20
+  severe_lost_threshold: 3.0
+  severe_lost_min_ratio: 0.25
+  infeasible_outside_ratio: 0.10
+  infeasible_speed_tolerance: 1.05
+  slot_out_of_bounds_threshold: 0.10
+  slot_boundary_safety_margin: 0.60
+  slot_too_close_ratio_threshold: 0.50
+  slot_unreachable_ratio_threshold: 0.50
+  static_slot_speed_epsilon: 1.0e-6
+
+obstacles:
+  sparse_random_obstacles:
+    count_min: 3
+    count_max: 6
+    radius_min: 0.35
+    radius_max: 0.85
+
+robustness:
+  observation_noise_std: [0.0]
+  obstacle_noise_std: [0.0]
+  action_delay_steps: [0]
+  actual_vmax_scale: [1.0]
+  wind_std: [0.0]
+  obstacle_dropout_prob: [0.0]
+
+controllers:
+  pure_pursuit: &pure_pursuit_controller
+    kp: 1.4
+    arrival_radius: 0.05
+  pure_pursuit_raw:
+    <<: *pure_pursuit_controller
+  pure_pursuit_safety:
+    <<: *pure_pursuit_controller
+  pd: &pd_controller
+    kp: 1.6
+    kd: 0.45
+    slot_velocity_gain: 0.6
+  pd_raw:
+    <<: *pd_controller
+  pd_safety:
+    <<: *pd_controller
+  nominal_slot_tracker: &nominal_controller
+    kp: 1.6
+    kd: 0.45
+    vmax: 1.0
+    amax: 2.0
+    dt: 0.05
+  nominal_raw:
+    <<: *nominal_controller
+  nominal_safety:
+    <<: *nominal_controller
+  existing:
+    planner_subgoal_enabled: true
+    final_obstacle_filter_enabled: false
+    free_space_fallback: true
+    obstacle_activation_distance: 2.5
+    boundary_activation_distance: 2.5
+    boundary_filter_mode: minimal_projection
+    boundary_alpha: 1.4
+    boundary_hard_margin: 0.35
+    boundary_braking_margin: 0.35
+    boundary_braking_gain: 1.4
+    boundary_projection_enabled: true
+    max_inward_correction: 1.0
+    inter_agent_activation_distance: 0.75
+    line_of_sight_shortcut: true
+    line_of_sight_safety_margin: 0.25
+    nominal_slot_tracker:
+      kp: 1.6
+      kd: 0.45
+      vmax: 1.0
+      amax: 2.0
+      dt: 0.05
+    horizon_s: 1.5
+    dt: 0.05
+    vmax: 1.0
+    amax_xy: 2.0
+    uav_radius: 0.15
+    safety_margin: 0.25
+    boundary_margin: 0.0
+    position_kp: 1.2
+    obstacle_influence_radius: 2.6
+    obstacle_barrier_gain: 1.8
+    obstacle_repulse_gain: 0.45
+    prefer_holonomic_tracking: true
+    use_sampled_planner: false
+    planner_subgoal:
+      grid_resolution: 0.35
+      lookahead_distance: 0.5
+      tracking_margin: 0.14
+      planning_safety_margin_extra: 0.14
+      planner_enter_inflation: 0.05
+      planner_exit_inflation: 0.18
+      clear_los_hold_steps: 8
+      nominal_rollout_horizon: 4
+      nominal_rollout_clearance: 0.05
+      min_replan_interval_steps: 12
+      proxy_replan_threshold: 0.8
+      target_lead_time_s: 1.2
+      path_deviation_threshold: 1.2
+      stuck_window: 12
+      subgoal_visibility_required: true
+      max_subgoal_shift_per_step: 0.45
+      subgoal_hold_steps: 8
+      allow_backward_progress: false
+      clearance_weight: 0.04
+      replan_goal_delta: 0.8
+      replan_path_deviation: 1.2
+      max_expansions: 30000
+      tracker: nominal
+      nominal_slot_tracker:
+        kp: 1.6
+        kd: 0.45
+        vmax: 1.0
+        amax: 2.0
+        dt: 0.05
+  global_path_pure_pursuit:
+    grid_resolution: 0.35
+    lookahead_distance: 0.5
+    tracking_margin: 0.14
+    planning_safety_margin_extra: 0.14
+    planner_enter_inflation: 0.05
+    planner_exit_inflation: 0.18
+    clear_los_hold_steps: 8
+    nominal_rollout_horizon: 4
+    nominal_rollout_clearance: 0.05
+    min_replan_interval_steps: 12
+    proxy_replan_threshold: 0.8
+    target_lead_time_s: 1.2
+    path_deviation_threshold: 1.2
+    stuck_window: 12
+    subgoal_visibility_required: true
+    max_subgoal_shift_per_step: 0.45
+    subgoal_hold_steps: 8
+    allow_backward_progress: false
+    clearance_weight: 0.04
+    replan_goal_delta: 0.8
+    replan_path_deviation: 1.2
+    max_expansions: 30000
+    tracker: nominal
+    nominal_slot_tracker:
+      kp: 1.6
+      kd: 0.45
+      vmax: 1.0
+      amax: 2.0
+      dt: 0.05
+
+safety:
+  predictive_obstacle_filter: true
+  proxy_slot_margin_extra: 0.14
+
+output:
+  save_raw_trajectories: true
+  save_full_debug: true
+  save_every_step: true
+  debug_existing_max_plots: 20
+  debug_boundary_max_plots: 20
+  debug_obstacle_max_plots: 20

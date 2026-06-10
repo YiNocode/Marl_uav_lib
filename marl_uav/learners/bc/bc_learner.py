@@ -21,10 +21,18 @@ class BCLearner:
         lr: float = 3e-4,
         max_grad_norm: float = 0.5,
         mse_coef: float = 0.0,
+        nll_coef: float = 1.0,
+        loss_mode: str = "nll_mse",
     ) -> None:
         self.policy = policy
         self.max_grad_norm = float(max_grad_norm)
         self.mse_coef = float(mse_coef)
+        self.nll_coef = float(nll_coef)
+        self.loss_mode = str(loss_mode).strip().lower()
+        if self.loss_mode not in ("nll", "mse", "nll_mse"):
+            raise ValueError(
+                f"loss_mode must be one of 'nll', 'mse', or 'nll_mse', got {loss_mode!r}"
+            )
 
         self._actor_params = self._collect_actor_parameters(policy)
         self.optimizer = Adam(self._actor_params, lr=float(lr))
@@ -121,9 +129,14 @@ class BCLearner:
         )
         nll_loss = -torch.mean(new_log_probs)
 
-        loss = nll_loss
+        use_nll = self.loss_mode in ("nll", "nll_mse") and self.nll_coef > 0.0
+        use_mse = self.loss_mode in ("mse", "nll_mse") and self.mse_coef > 0.0
+
+        loss = torch.zeros((), dtype=torch.float32, device=self.device)
+        if use_nll:
+            loss = loss + self.nll_coef * nll_loss
         mse_loss_val = 0.0
-        if self.mse_coef > 0.0:
+        if use_mse:
             actor_out, _critic_out = self.policy.forward(  # type: ignore[attr-defined]
                 obs_t,
                 state_t,
@@ -133,6 +146,10 @@ class BCLearner:
             mse_loss = torch.mean((pred - actions_t) ** 2)
             loss = loss + self.mse_coef * mse_loss
             mse_loss_val = float(mse_loss.item())
+        if not (use_nll or use_mse):
+            raise ValueError(
+                "BC loss has no active term; set loss_mode/nll_coef/mse_coef to enable a loss."
+            )
 
         with torch.no_grad():
             actor_out, _ = self.policy.forward(  # type: ignore[attr-defined]
@@ -152,6 +169,8 @@ class BCLearner:
             "bc/mse_loss": mse_loss_val,
             "bc/mean_log_prob": float(new_log_probs.mean().item()),
             "bc/action_cosine_similarity": cos_sim,
+            "bc/nll_coef": self.nll_coef,
+            "bc/mse_coef": self.mse_coef,
             "_loss_tensor": loss,
         }
 

@@ -11,6 +11,10 @@ from marl_uav.control.geometric_pursuit_baselines import (
     make_ot_slot_get_actions_fn,
     make_pure_pursuit_get_actions_fn,
 )
+from marl_uav.control.obstacle_apf_baselines import (
+    make_fixed_ring_apf_get_actions_fn,
+    make_pure_pursuit_apf_get_actions_fn,
+)
 from marl_uav.control.obstacle_aware_sce_baselines import (
     make_sce_cached_path_slot_get_actions_fn,
     make_sce_turn_radius_slot_get_actions_fn,
@@ -30,8 +34,12 @@ def make_expert_get_actions_fn(
 
     if name in ("pure_pursuit", "purepursuit"):
         return make_pure_pursuit_get_actions_fn(env, **cfg)
-    if name in ("fixed_ring", "fixedring"):
+    if name in ("pure_pursuit_apf", "purepursuit_apf"):
+        return make_pure_pursuit_apf_get_actions_fn(env, **cfg)
+    if name in ("fixed_ring", "fixedring", "fiexd_ring", "fiexdring"):
         return make_fixed_ring_get_actions_fn(env, **cfg)
+    if name in ("fixed_ring_apf", "fixedring_apf", "fiexd_ring_apf", "fiexdring_apf"):
+        return make_fixed_ring_apf_get_actions_fn(env, **cfg)
     if name in ("oracle_slot", "oracleslot"):
         return make_oracle_slot_get_actions_fn(env, **cfg)
     if name in ("hungarian_slot", "hungarian"):
@@ -53,6 +61,7 @@ def make_expert_get_actions_fn(
         )
     raise ValueError(
         f"Unsupported BC expert={expert!r}. "
-        "Choose one of: pure_pursuit, fixed_ring, oracle_slot, hungarian_slot, ot_slot, "
+        "Choose one of: pure_pursuit, pure_pursuit_apf, fixed_ring, fixed_ring_apf, "
+        "oracle_slot, hungarian_slot, ot_slot, "
         "sce_cached_path_slot, sce_turn_radius_slot."
     )

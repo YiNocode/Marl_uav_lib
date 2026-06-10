@@ -1,0 +1,68 @@
+suite: E4
+scenario: sce_ablation
+backend: pyflyt
+result_root: results/e4_sce_ablation_pyflyt
+
+eval_seeds: [401, 402, 403]
+eval:
+  base_seed: 10010
+  episodes_per_seed: 200
+  terminal_window: 30
+  holdout_seeds: [401, 402, 403]
+
+variants:
+  - name: E1_open_space
+    config_overrides:
+      env: configs/env/pyflyt_open_space.yaml
+      task:
+        name: pursuit_evasion_3v1_ex1
+  - name: E2_obstacle_field
+    config_overrides:
+      env: configs/env/pyflyt_obstacles.yaml
+      task:
+        name: pursuit_evasion_3v1_ex2
+        obstacle_grid_spacing: 10.0
+  - name: E3_spacing_10m
+    obstacle_grid_spacing: 10.0
+    config_overrides:
+      env: configs/env/pyflyt_density.yaml
+  - name: E3_spacing_8m
+    obstacle_grid_spacing: 8.0
+    config_overrides:
+      env: configs/env/pyflyt_density.yaml
+  - name: E3_spacing_6m
+    obstacle_grid_spacing: 6.0
+    config_overrides:
+      env: configs/env/pyflyt_density.yaml
+  - name: E3_spacing_5m
+    obstacle_grid_spacing: 5.0
+    config_overrides:
+      env: configs/env/pyflyt_density.yaml
+
+methods:
+  SCE_without_slot_allocation:
+    kind: heuristic
+    config: configs/experiment/e2/sce.yaml
+    paper_name: SCE-no-slot
+    train: false
+    config_overrides:
+      trajectory_planner:
+        disable_slot_allocation: true
+  SCE_without_manifold_generation:
+    kind: heuristic
+    config: configs/experiment/e2/sce.yaml
+    paper_name: SCE-no-manifold
+    train: false
+    config_overrides:
+      trajectory_planner:
+        disable_manifold_generation: true
+        fixed_ring_radius: 1.6
+        fixed_ring_phase: 0.0
+  SCE_without_obstacle_avoidance:
+    kind: heuristic
+    config: configs/experiment/e2/sce.yaml
+    paper_name: SCE-no-avoidance
+    train: false
+    config_overrides:
+      trajectory_planner:
+        disable_obstacle_avoidance: true

@@ -1,0 +1,25 @@
+suite: E1
+scenario: open_space
+backend: pyflyt
+result_root: results/e1_open_space_pyflyt
+
+seeds: [101, 102, 103]
+eval:
+  base_seed: 7010
+  episodes_per_seed: 200
+  terminal_window: 30
+
+methods:
+  pure_pursuit:
+    kind: heuristic
+    config: configs/experiment/e1/pure_pursuit.yaml
+    train: false
+  fixed_ring:
+    kind: heuristic
+    config: configs/experiment/e1/fixed_ring.yaml
+    train: false
+  SCE:
+    kind: heuristic
+    config: configs/experiment/e1/sce.yaml
+    paper_name: SCE
+    train: false

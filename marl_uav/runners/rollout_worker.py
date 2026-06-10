@@ -513,6 +513,18 @@ class RolloutWorker(BaseRunner):
             ]
             if replans:
                 info["mean_num_replans_this_step"] = float(np.mean(replans))
+            decision_vals = [
+                float(row["decision_time_ms"])
+                for row in obstacle_aware_series
+                if "decision_time_ms" in row and row["decision_time_ms"] is not None
+            ]
+            if decision_vals:
+                arr = np.asarray(decision_vals, dtype=np.float64)
+                arr = arr[np.isfinite(arr)]
+                if arr.size:
+                    info["avg_decision_ms"] = float(np.mean(arr))
+                    info["p95_decision_ms"] = float(np.percentile(arr, 95))
+                    info["max_decision_ms"] = float(np.max(arr))
 
         try:
             from marl_uav.control.obstacle_aware_sce_baselines import episode_timing_summary

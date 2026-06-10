@@ -7,8 +7,8 @@ from typing import Any
 
 from marl_uav.utils.config import load_config
 
-E1_1_SUITE_REL = Path("configs/benchmark/e1_1_open_space_suite.yaml")
-E2_OBSTACLES_SUITE_REL = Path("configs/benchmark/e2_obstacles_suite.yaml")
+E1_1_SUITE_REL = Path("configs/benchmark/e1_open_space_suite.yaml")
+E2_OBSTACLES_SUITE_REL = Path("configs/benchmark/e2_obstacle_field_suite.yaml")
 
 
 def load_e1_1_suite(path: Path | None = None) -> dict[str, Any]:
@@ -26,7 +26,7 @@ def resolve_suite_for_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     bench = cfg.get("benchmark") or {}
     suite_name = str(bench.get("suite", "")).strip().upper()
     scenario = str(bench.get("scenario", "")).strip()
-    if suite_name == "E2" or scenario in ("e2_obstacles", "e2"):
+    if suite_name == "E2" or scenario in ("obstacle_field", "e2_obstacles", "e2"):
         return load_e2_obstacles_suite()
     return load_e1_1_suite()
 
@@ -35,7 +35,7 @@ def suite_ref_for_cfg(cfg: dict[str, Any]) -> str:
     bench = cfg.get("benchmark") or {}
     suite_name = str(bench.get("suite", "")).strip().upper()
     scenario = str(bench.get("scenario", "")).strip()
-    if suite_name == "E2" or scenario in ("e2_obstacles", "e2"):
+    if suite_name == "E2" or scenario in ("obstacle_field", "e2_obstacles", "e2"):
         return str(E2_OBSTACLES_SUITE_REL).replace("\\", "/")
     return str(E1_1_SUITE_REL).replace("\\", "/")
 

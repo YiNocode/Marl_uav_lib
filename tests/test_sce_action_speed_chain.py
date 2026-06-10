@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_sce_effective_max_xy_setpoint_matches_env_and_task() -> None:
-    cfg = load_config(ROOT / "configs/experiment/e1_1_open_space_pyflyt_sce.yaml")
+    cfg = load_config(ROOT / "configs/experiment/e1/sce.yaml")
     env = build_env_from_config(ROOT / cfg["env"], seed=0, task_cfg=cfg["task"])
     try:
         task = env.task
@@ -24,14 +24,13 @@ def test_sce_effective_max_xy_setpoint_matches_env_and_task() -> None:
 
         assert a_hi == 0.25
         assert ref == 0.25
-        assert float(task.pursuer_speed_xy) == 1.5
-        assert expected == 1.5
+        assert float(task.pursuer_speed_xy) == 2.5
+        assert expected == 2.5
         assert float(task.pursuer_speed_z) == 0.30
         assert float(task.continuous_action_yaw_ref) == 0.25
 
-        sce = cfg.get("sce") or {}
-        assert float(sce["xy_gain"]) == a_hi
-        assert float(sce["yaw_gain"]) == 0.25
+        planner = cfg.get("trajectory_planner") or {}
+        assert float(planner["obstacle_avoidance"]["vmax"]) == a_hi
     finally:
         env.close()
 

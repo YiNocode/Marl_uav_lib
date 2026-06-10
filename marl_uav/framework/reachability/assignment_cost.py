@@ -45,6 +45,7 @@ class ReachabilityConfig:
     candidate_slots: dict[str, Any] = field(default_factory=dict)
     assignment_cost: dict[str, Any] = field(default_factory=dict)
     structure_selection: dict[str, Any] = field(default_factory=dict)
+    slot_transition: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, cfg: dict[str, Any] | None) -> ReachabilityConfig:
@@ -75,6 +76,7 @@ class ReachabilityConfig:
             candidate_slots=dict(raw.get("candidate_slots") or {}),
             assignment_cost=dict(raw.get("assignment_cost") or {}),
             structure_selection=dict(raw.get("structure_selection") or {}),
+            slot_transition=dict(raw.get("slot_transition") or {}),
         )
 
     def structure_cfg(self) -> StructureAssignmentConfig:

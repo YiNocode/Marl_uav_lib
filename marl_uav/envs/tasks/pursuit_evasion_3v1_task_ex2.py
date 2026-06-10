@@ -27,7 +27,7 @@ class PursuitEvasion3v1Task(PursuitEvasion3v1TaskEx1Base):
     在 ex1（结构感知观测、自适应尺度等）基础上增加圆柱障碍物（ex2）。
 
     场景级参数（障碍网格间距、半径比例、碰撞惩罚等）默认在
-    ``configs/env/e2_obstacle_scenario.yaml`` 中配置，经 env ``scenario_config``
+    ``configs/env/scenarios/e2_obstacle_field.yaml`` 中配置，经 env ``scenario_config``
     合并进 task；实验 YAML 仅保留方法相关的速度与奖励覆盖。
 
     在 ex1 基础上：

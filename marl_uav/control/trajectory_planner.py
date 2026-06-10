@@ -9,7 +9,6 @@ from typing import Any
 import numpy as np
 
 from marl_uav.control.altitude_hold import apply_hard_altitude_to_action_row
-from marl_uav.control.boundary_utils import apply_xy_boundary_barrier
 from marl_uav.control.geometric_pursuit_baselines import (
     pursuer_yaws_from_backend,
 )
@@ -21,6 +20,7 @@ from marl_uav.control.manifold_generator import (
 )
 from marl_uav.control.obstacle_avoidance_controller import ObstacleAvoidanceController
 from marl_uav.control.slot_allocator import SlotAllocator
+from marl_uav.control.slot_transition_manager import SlotTransitionManager
 from marl_uav.framework.geometry.obstacle_adapter import manifold_influencing_obstacles, obstacles_from_task_state
 from marl_uav.utils.control_timing import publish_control_timing, should_record_control_timing
 
@@ -28,9 +28,9 @@ from marl_uav.utils.control_timing import publish_control_timing, should_record_
 @dataclass(frozen=True)
 class SlotTargetStabilizerConfig:
     assignment_switch_margin: float = 0
-    min_assignment_hold_steps: int = 0
+    min_assignment_hold_steps: int = 500
     slot_filter_alpha: float = 1
-    slot_target_vmax_ratio: float = 100
+    slot_target_vmax_ratio: float = 50
     control_dt: float = 0.04
     freeze_slots_after_first_step: bool = False
     freeze_assignment_after_first_step: bool = False
@@ -238,6 +238,10 @@ class TrajectoryPlannerState:
     prev_slot_ff_step: int | None = None
     manifold_signature: ManifoldSignature | None = None
     manifold_version: int = 0
+    slot_transition_managers: list[SlotTransitionManager] = field(default_factory=list)
+    last_commanded_targets: np.ndarray | None = None
+    last_proxy_targets: np.ndarray | None = None
+    last_slot_transition_diag: list[dict[str, Any]] = field(default_factory=list)
 
     def reset_episode(self) -> None:
         self.allocator.reset()
@@ -251,6 +255,10 @@ class TrajectoryPlannerState:
         self.prev_slot_ff_step = None
         self.manifold_signature = None
         self.manifold_version = 0
+        self.slot_transition_managers = []
+        self.last_commanded_targets = None
+        self.last_proxy_targets = None
+        self.last_slot_transition_diag = []
 
 
 def _get_state(env: Any, cfg: dict[str, Any]) -> TrajectoryPlannerState:
@@ -271,6 +279,41 @@ def _maybe_reset(env: Any, st: TrajectoryPlannerState) -> None:
         st.reset_episode()
     st.last_step = step
 
+
+def _fixed_ring_targets(
+    evader_pos: np.ndarray,
+    *,
+    radius: float,
+    z: float,
+    phase: float,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    e = np.asarray(evader_pos, dtype=np.float64).reshape(3)
+    r = max(float(radius), 1e-6)
+    theta = np.asarray([0.0, 2.0 * np.pi / 3.0, 4.0 * np.pi / 3.0], dtype=np.float64)
+    theta = theta + float(phase)
+    slots = np.zeros((3, 3), dtype=np.float32)
+    slots[:, 0] = np.float32(e[0]) + np.float32(r) * np.cos(theta).astype(np.float32)
+    slots[:, 1] = np.float32(e[1]) + np.float32(r) * np.sin(theta).astype(np.float32)
+    slots[:, 2] = np.float32(z)
+
+    curve_theta = np.linspace(0.0, 2.0 * np.pi, 64, endpoint=True, dtype=np.float64) + float(phase)
+    curve = np.zeros((curve_theta.shape[0], 3), dtype=np.float32)
+    curve[:, 0] = np.float32(e[0]) + np.float32(r) * np.cos(curve_theta).astype(np.float32)
+    curve[:, 1] = np.float32(e[1]) + np.float32(r) * np.sin(curve_theta).astype(np.float32)
+    curve[:, 2] = np.float32(z)
+    diag = {
+        "target_radius_xy_mean": float(r),
+        "target_radius_xy_min": float(r),
+        "target_radius_xy_max": float(r),
+        "curve_num_samples": int(curve.shape[0]),
+        "rho_base": float(r),
+        "rho_max": float(r),
+        "rho_min": float(r),
+        "contraction_decay": 1.0,
+        "manifold_contraction_rate": 0.0,
+        "manifold_generation_disabled": True,
+    }
+    return slots, curve, diag
 
 
 
@@ -478,6 +521,79 @@ def _control_dt_from_env(env: Any, task: Any, raw_cfg: dict[str, Any]) -> float:
     return 1.0
 
 
+def _slot_transition_enabled(raw_cfg: dict[str, Any]) -> bool:
+    cfg = dict(raw_cfg.get("slot_transition", {}) or {})
+    return bool(cfg.get("enabled", True))
+
+
+def _apply_slot_transition_layer(
+    st: TrajectoryPlannerState,
+    *,
+    raw_cfg: dict[str, Any],
+    task: Any,
+    assigned_targets: np.ndarray,
+    pursuer_pos: np.ndarray,
+    obstacles: list[Any],
+    current_step: int,
+    control_dt: float,
+    tracking_vmax: float,
+    world_xy: float,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    raw = np.asarray(assigned_targets, dtype=np.float64).reshape(3, 3)
+    if not _slot_transition_enabled(raw_cfg):
+        st.last_commanded_targets = raw.copy()
+        st.last_proxy_targets = raw.copy()
+        st.last_slot_transition_diag = []
+        return raw.copy(), raw.copy(), []
+
+    cfg = dict(raw_cfg.get("slot_transition", {}) or {})
+    safety_cfg = dict(raw_cfg.get("obstacle_avoidance", {}) or {})
+    uav_radius = float(cfg.get("uav_radius", safety_cfg.get("uav_radius", 0.15)))
+    safety_margin = float(cfg.get("safety_margin", safety_cfg.get("safety_margin", 0.30)))
+    vmax = float(cfg.get("slot_ref_vmax", max(float(tracking_vmax), 1e-6)))
+    amax = float(cfg.get("slot_ref_amax", max(2.0 * vmax, 1e-6)))
+    planner_cfg = dict(cfg.get("planner") or {})
+    desired = {
+        "world_xy": float(world_xy if np.isfinite(world_xy) and world_xy > 0.0 else getattr(task, "world_xy", 20.0)),
+        "uav_radius": uav_radius,
+        "safety_margin": safety_margin,
+        "dt": max(float(control_dt), 1e-6),
+        "slot_ref_vmax": vmax,
+        "slot_ref_amax": amax,
+        "jump_detection_threshold": float(cfg.get("jump_detection_threshold", 0.5)),
+        "frequent_jump_min_interval_steps": int(cfg.get("frequent_jump_min_interval_steps", 20)),
+        "high_freq_factor": float(cfg.get("high_freq_factor", 1.25)),
+        "planner_cfg": planner_cfg,
+    }
+    if len(st.slot_transition_managers) != 3:
+        st.slot_transition_managers = [SlotTransitionManager(**desired) for _ in range(3)]
+
+    commanded = np.zeros_like(raw, dtype=np.float64)
+    proxy = np.zeros_like(raw, dtype=np.float64)
+    diags: list[dict[str, Any]] = []
+    previous = st.last_commanded_targets
+    ppos = np.asarray(pursuer_pos, dtype=np.float64).reshape(3, 3)
+    for i, mgr in enumerate(st.slot_transition_managers):
+        prev_i = None
+        if previous is not None and np.asarray(previous).shape == raw.shape:
+            prev_i = np.asarray(previous, dtype=np.float64)[i]
+        out = mgr.update(
+            raw_slot_pos=raw[i],
+            previous_commanded_slot_pos=prev_i,
+            uav_pos=ppos[i],
+            obstacles=obstacles,
+            step=int(current_step),
+        )
+        commanded[i] = np.asarray(out["commanded_slot_pos"], dtype=np.float64).reshape(3)
+        proxy[i] = np.asarray(out["proxy_slot_pos"], dtype=np.float64).reshape(3)
+        diags.append(dict(out))
+
+    st.last_commanded_targets = commanded.copy()
+    st.last_proxy_targets = proxy.copy()
+    st.last_slot_transition_diag = diags
+    return commanded.copy(), proxy.copy(), diags
+
+
 def _segment_is_clear_xy(
     start_xy: np.ndarray,
     goal_xy: np.ndarray,
@@ -619,6 +735,15 @@ def trajectory_planner_actions_from_state(
     world_xy = float(getattr(task, "world_xy", 0.0))
     boundary_margin = float(raw_cfg.get("boundary_margin", 0.30))
     boundary_alpha = float(raw_cfg.get("boundary_alpha", 2.0))
+    boundary_activation_distance = float(raw_cfg.get("boundary_activation_distance", max(boundary_margin, 0.60)))
+    boundary_hard_margin = float(raw_cfg.get("boundary_hard_margin", 0.05))
+    boundary_braking_margin = float(raw_cfg.get("boundary_braking_margin", max(boundary_margin, boundary_hard_margin)))
+    boundary_braking_gain = float(raw_cfg.get("boundary_braking_gain", boundary_alpha))
+    max_inward_correction = float(raw_cfg.get("max_inward_correction", tracking_vmax))
+    velocity_kd = float(raw_cfg.get("tracking_kd", raw_cfg.get("velocity_kd", raw_cfg.get("kd", 0.45))))
+    disable_slot_allocation = bool(raw_cfg.get("disable_slot_allocation", False))
+    disable_manifold_generation = bool(raw_cfg.get("disable_manifold_generation", False))
+    disable_obstacle_avoidance = bool(raw_cfg.get("disable_obstacle_avoidance", False))
     curve_tol = float(raw_cfg.get("manifold_replan_curve_tol", 0.05))
     rho_tol = float(raw_cfg.get("manifold_replan_rho_tol", 0.001))
     current_step = int(getattr(env, "step_count", 0))
@@ -641,7 +766,13 @@ def trajectory_planner_actions_from_state(
         st.avoidance.cfg,
         world_xy=world_xy,
         boundary_margin=boundary_margin,
+        boundary_activation_distance=boundary_activation_distance,
+        boundary_hard_margin=boundary_hard_margin,
+        boundary_braking_margin=boundary_braking_margin,
+        boundary_braking_gain=boundary_braking_gain,
+        max_inward_correction=max_inward_correction,
         vmax=tracking_vmax,
+        velocity_kd=velocity_kd,
         prefer_holonomic_tracking=True,
         use_sampled_planner=False,
     )
@@ -649,17 +780,46 @@ def trajectory_planner_actions_from_state(
     st.avoidance.cfg = replace(st.avoidance.cfg, lookahead_dist=lookahead_dist)
 
     t_manifold = time.perf_counter()
-    slots, curve_new, manifold_diag = st.manifold.generate(task, pursuer_pos, evader_pos, task_state)
+    if disable_manifold_generation:
+        fixed_radius = float(raw_cfg.get(
+            "fixed_ring_radius",
+            raw_cfg.get("ring_radius", 1.6 * float(getattr(task, "capture_dist", 1.0))),
+        ))
+        fixed_z = float(raw_cfg.get("fixed_ring_z", evader_pos[2]))
+        fixed_phase = float(raw_cfg.get("fixed_ring_phase", getattr(task, "manifold_target_phase", 0.0)))
+        slots, curve_new, manifold_diag = _fixed_ring_targets(
+            evader_pos,
+            radius=fixed_radius,
+            z=fixed_z,
+            phase=fixed_phase,
+        )
+    else:
+        slots, curve_new, manifold_diag = st.manifold.generate(task, pursuer_pos, evader_pos, task_state)
     manifold_dt = time.perf_counter() - t_manifold
 
     t_assign = time.perf_counter()
-    raw_assignment, raw_assigned_targets, allocation_diag = st.allocator.allocate(
-        pursuer_pos,
-        slots,
-        obstacles,
-        pursuer_yaws=yaws,
-        world_xy=world_xy,
-    )
+    if disable_slot_allocation:
+        raw_assignment = np.arange(3, dtype=np.int64)
+        raw_assigned_targets = np.asarray(slots, dtype=np.float32).reshape(3, 3)[raw_assignment]
+        allocation_diag = {
+            "role_assignment": raw_assignment.astype(int).tolist(),
+            "slot_allocation_disabled": True,
+            "cost_matrix": np.zeros((3, 3), dtype=float).tolist(),
+            "transport_plan": np.eye(3, dtype=float).tolist(),
+            "ot_epsilon": 0.0,
+            "los_blocked_matrix": np.zeros((3, 3), dtype=bool).tolist(),
+            "reach_blocked_matrix": np.zeros((3, 3), dtype=bool).tolist(),
+            "reachability_cost_matrix": np.zeros((3, 3), dtype=float).tolist(),
+            "reach_min_clearance_matrix": np.full((3, 3), np.inf, dtype=float).tolist(),
+        }
+    else:
+        raw_assignment, raw_assigned_targets, allocation_diag = st.allocator.allocate(
+            pursuer_pos,
+            slots,
+            obstacles,
+            pursuer_yaws=yaws,
+            world_xy=world_xy,
+        )
     assignment_dt = time.perf_counter() - t_assign
 
     assignment, assigned_targets, slot_stabilizer_diags = st.slot_stabilizer.update(
@@ -670,13 +830,31 @@ def trajectory_planner_actions_from_state(
         cfg=stabilizer_cfg,
         tracking_vmax=tracking_vmax,
     )
+    stabilized_assigned_targets = np.asarray(assigned_targets, dtype=np.float64).copy()
+    control_dt = _control_dt_from_env(env, task, raw_cfg)
+    assigned_targets, proxy_assigned_targets, slot_transition_diags = _apply_slot_transition_layer(
+        st,
+        raw_cfg=raw_cfg,
+        task=task,
+        assigned_targets=stabilized_assigned_targets,
+        pursuer_pos=pursuer_pos,
+        obstacles=[] if disable_obstacle_avoidance else obstacles,
+        current_step=current_step,
+        control_dt=control_dt,
+        tracking_vmax=tracking_vmax,
+        world_xy=world_xy,
+    )
     task_state.assigned_target_indices = np.asarray(assignment, dtype=np.int64).copy()
     allocation_diag = {
         **allocation_diag,
+        "slot_allocation_disabled": bool(disable_slot_allocation),
         "raw_assignment": raw_assignment.astype(int).tolist(),
         "raw_assigned_targets": np.asarray(raw_assigned_targets, dtype=np.float64).astype(float).tolist(),
         "stabilized_assignment": assignment.astype(int).tolist(),
-        "stabilized_assigned_targets": np.asarray(assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "stabilized_assigned_targets": stabilized_assigned_targets.astype(float).tolist(),
+        "proxy_assigned_targets": np.asarray(proxy_assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "commanded_assigned_targets": np.asarray(assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "slot_transition": slot_transition_diags,
     }
 
     # Default to pure feedback. Slot-velocity feed-forward is useful only when
@@ -684,8 +862,7 @@ def trajectory_planner_actions_from_state(
     # inject noisy target jumps and degrade tracking relative to pure pursuit.
     slot_velocity_ff_gain = float(raw_cfg.get("slot_velocity_ff_gain", 0.0))
     slot_velocity_ff_max = float(raw_cfg.get("slot_velocity_ff_max", 0.5 * tracking_vmax))
-    control_dt = _control_dt_from_env(env, task, raw_cfg)
-    predictive_boundary_guard_enabled = bool(raw_cfg.get("predictive_boundary_guard_enabled", True))
+    predictive_boundary_guard_enabled = bool(raw_cfg.get("predictive_boundary_guard_enabled", False))
     predictive_boundary_amax_raw = raw_cfg.get(
         "predictive_boundary_amax_xy",
         raw_cfg.get("boundary_amax_xy", raw_cfg.get("amax_xy", st.avoidance.cfg.amax_xy)),
@@ -752,7 +929,7 @@ def trajectory_planner_actions_from_state(
         direct_clear, direct_clearance, direct_reason = _segment_is_clear_xy(
             pursuer_pos[i, :2],
             final_goal_xy,
-            obstacles,
+            [] if disable_obstacle_avoidance else obstacles,
             uav_radius=float(st.avoidance.cfg.uav_radius),
             clearance_margin=float(st.avoidance.cfg.safety_margin),
             bounds_xy=bounds_xy,
@@ -766,11 +943,11 @@ def trajectory_planner_actions_from_state(
             pursuer_pos[i, :2],
             float(yaws[i]),
             waypoint_xy,
-            obstacles,
+            [] if disable_obstacle_avoidance else obstacles,
             prev_action=st.prev_local_actions[i],
             current_velocity_xy=vel_world[i],
             bounds_xy=bounds_xy,
-            feedforward_velocity_xy=None,
+            feedforward_velocity_xy=slot_velocity_ff[i],
         )
         diag["final_slot_distance"] = float(np.linalg.norm(assigned_targets[i, :2] - pursuer_pos[i, :2]))
         diag["tracking_waypoint_xy"] = np.asarray(waypoint_xy, dtype=np.float64).astype(float).tolist()
@@ -779,27 +956,24 @@ def trajectory_planner_actions_from_state(
         diag["direct_slot_clearance"] = float(direct_clearance)
         diag["tracking_vmax"] = float(tracking_vmax)
         diag["action_cap_xy"] = float(action_cap_xy)
-        diag["slot_velocity_ff_xy"] = [0.0, 0.0]
+        diag["slot_velocity_ff_xy"] = np.asarray(slot_velocity_ff[i], dtype=np.float64).astype(float).tolist()
         diag["slot_velocity_ff_candidate_xy"] = np.asarray(slot_velocity_ff[i], dtype=np.float64).astype(float).tolist()
         diag["slot_velocity_ff_gain"] = float(slot_velocity_ff_gain)
         diag["slot_velocity_ff_max"] = float(slot_velocity_ff_max)
-        diag["slot_velocity_ff_applied"] = False
+        diag["slot_velocity_ff_applied"] = bool(np.linalg.norm(slot_velocity_ff[i]) > 1e-9)
         diag["waypoint_mode"] = str(waypoint_mode)
+        diag["obstacle_avoidance_disabled"] = bool(disable_obstacle_avoidance)
         diag["control_dt"] = float(control_dt)
         diag["raw_slot_id"] = int(raw_assignment[i])
         diag["raw_slot_target_xy"] = np.asarray(raw_assigned_targets[i, :2], dtype=np.float64).astype(float).tolist()
         diag["stabilized_slot_id"] = int(assignment[i])
+        diag["proxy_slot_target_xy"] = np.asarray(proxy_assigned_targets[i, :2], dtype=np.float64).astype(float).tolist()
+        diag["commanded_slot_target_xy"] = np.asarray(assigned_targets[i, :2], dtype=np.float64).astype(float).tolist()
+        diag["slot_transition"] = slot_transition_diags[i] if i < len(slot_transition_diags) else {}
         diag.update(slot_stabilizer_diags[i])
-        diag["nominal_tracking_mode"] = "kp_to_stabilized_slot_then_safety_layer"
-        u_safe, boundary_active = apply_xy_boundary_barrier(
-            pursuer_pos[i, :2],
-            action_xy_w,
-            world_xy=world_xy,
-            boundary_margin=boundary_margin,
-            boundary_alpha=boundary_alpha,
-            action_low_xy=low[:2],
-            action_high_xy=high[:2],
-        )
+        diag["nominal_tracking_mode"] = "kp_to_commanded_slot_then_safety_layer"
+        u_safe = np.asarray(action_xy_w, dtype=np.float64).reshape(2).copy()
+        boundary_active = bool(diag.get("boundary_filter_active", False))
         if predictive_boundary_guard_enabled:
             u_safe, predictive_boundary_active, predictive_boundary_diag = _apply_predictive_xy_boundary_guard(
                 pursuer_pos[i, :2],
@@ -820,6 +994,8 @@ def trajectory_planner_actions_from_state(
             diag["predictive_boundary_active_axes"] = []
             diag["predictive_boundary_amax_xy"] = float(predictive_boundary_amax)
             diag["predictive_boundary_gain"] = float(boundary_alpha)
+        diag["componentwise_boundary_filter_active"] = bool(boundary_active)
+        diag["componentwise_boundary_active_names"] = list(diag.get("boundary_active_names", []))
         actions[i, 0] = np.float32(float(u_safe[0]))
         actions[i, 1] = np.float32(float(u_safe[1]))
         if actions.shape[1] >= 3:
@@ -861,10 +1037,13 @@ def trajectory_planner_actions_from_state(
         debug_pursuers.append(
             {
                 "slot_id": int(assignment[i]),
-                "slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_target_xy": stabilized_assigned_targets[i, :2].astype(float).tolist(),
                 "raw_slot_id": int(raw_assignment[i]),
                 "raw_slot_target_xy": np.asarray(raw_assigned_targets[i, :2], dtype=np.float64).astype(float).tolist(),
-                "stabilized_slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "stabilized_slot_target_xy": stabilized_assigned_targets[i, :2].astype(float).tolist(),
+                "proxy_slot_target_xy": np.asarray(proxy_assigned_targets[i, :2], dtype=np.float64).astype(float).tolist(),
+                "commanded_slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_transition": slot_transition_diags[i] if i < len(slot_transition_diags) else {},
                 "speed_cmd_xy": float(np.hypot(actions[i, 0], actions[i, 1])),
                 "world_speed_cmd_xy": float(fd.get("selected_action_norm", 0.0)),
                 "speed_cap_xy": float(action_cap_xy),
@@ -930,8 +1109,14 @@ def trajectory_planner_actions_from_state(
                 "manifold_replanned": bool(replanned),
                 "manifold_change_metric": float(new_sig.max_curve_displacement),
                 "path_target_shift": float(target_shift),
+                "manifold_generation_disabled": bool(disable_manifold_generation),
             },
             "allocation": allocation_diag,
+            "ablation": {
+                "disable_slot_allocation": bool(disable_slot_allocation),
+                "disable_manifold_generation": bool(disable_manifold_generation),
+                "disable_obstacle_avoidance": bool(disable_obstacle_avoidance),
+            },
         },
         "mean_follow_time_ms": float(avoid_dt * 1000.0),
         "decision_total_ms": float(total_dt * 1000.0),
@@ -942,7 +1127,10 @@ def trajectory_planner_actions_from_state(
         "assignment": assignment.astype(int).tolist(),
         "raw_assignment": raw_assignment.astype(int).tolist(),
         "raw_assigned_targets": np.asarray(raw_assigned_targets, dtype=np.float64).astype(float).tolist(),
-        "stabilized_assigned_targets": np.asarray(assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "stabilized_assigned_targets": stabilized_assigned_targets.astype(float).tolist(),
+        "proxy_assigned_targets": np.asarray(proxy_assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "commanded_assigned_targets": np.asarray(assigned_targets, dtype=np.float64).astype(float).tolist(),
+        "slot_transition": slot_transition_diags,
         "manifold_version": int(st.manifold_version),
         "manifold_replanned": bool(replanned),
         "deploy_control": deploy_control,

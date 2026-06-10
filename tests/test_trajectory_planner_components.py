@@ -429,7 +429,15 @@ def test_obstacle_avoidance_turns_when_direct_path_is_blocked() -> None:
 
 
 def test_executable_safety_heading_gate_stops_large_misalignment() -> None:
-    ctrl = ObstacleAvoidanceController({"vmax": 0.25, "speed_samples": [1.0, 0.6, 0.3, 0.0]})
+    ctrl = ObstacleAvoidanceController(
+        {
+            "vmax": 0.25,
+            "speed_samples": [1.0, 0.6, 0.3, 0.0],
+            "prefer_holonomic_tracking": False,
+            "use_sampled_planner": True,
+            "direct_los_enabled": False,
+        }
+    )
     _action, _yaw_rate, _path, diag = ctrl.compute_action(
         np.array([0.0, 0.0]),
         0.0,
@@ -449,6 +457,9 @@ def test_executable_safety_rejects_out_of_bounds_rollouts() -> None:
             "safety_margin": 0.10,
             "uav_radius": 0.10,
             "boundary_margin": 0.30,
+            "prefer_holonomic_tracking": False,
+            "use_sampled_planner": True,
+            "direct_los_enabled": False,
         }
     )
     pos = np.array([4.5, 0.0])
@@ -486,6 +497,57 @@ def test_obstacle_avoidance_respects_boundary() -> None:
     assert diag["valid_candidate_count"] > 0
     usable = world_xy - margin
     assert np.all(np.abs(path[:, 0]) <= usable + 1e-6)
+
+
+def test_obstacle_avoidance_boundary_filter_preserves_tangent() -> None:
+    ctrl = ObstacleAvoidanceController(
+        {
+            "vmax": 1.0,
+            "position_kp": 1.0,
+            "boundary_activation_distance": 0.6,
+            "boundary_braking_margin": 0.0,
+            "world_xy": 5.0,
+            "boundary_margin": 0.0,
+        }
+    )
+
+    action, _yaw_rate, _path, diag = ctrl.compute_action(
+        np.array([4.6, 0.0]),
+        0.0,
+        np.array([6.0, -1.0]),
+        [],
+        bounds_xy=(-5.0, 5.0, -5.0, 5.0),
+    )
+
+    assert diag["boundary_filter_active"] is True
+    assert "x_max" in diag["boundary_active_names"]
+    assert action[0] <= 1e-9
+    assert action[1] < -0.55
+
+
+def test_obstacle_avoidance_boundary_filter_handles_corner_axes() -> None:
+    ctrl = ObstacleAvoidanceController(
+        {
+            "vmax": 1.0,
+            "position_kp": 1.0,
+            "boundary_activation_distance": 0.6,
+            "boundary_braking_margin": 0.0,
+            "world_xy": 5.0,
+            "boundary_margin": 0.0,
+        }
+    )
+
+    action, _yaw_rate, _path, diag = ctrl.compute_action(
+        np.array([4.6, 4.6]),
+        0.0,
+        np.array([6.0, 6.0]),
+        [],
+        bounds_xy=(-5.0, 5.0, -5.0, 5.0),
+    )
+
+    assert set(diag["boundary_active_names"]) == {"x_max", "y_max"}
+    assert action[0] <= 1e-9
+    assert action[1] <= 1e-9
 
 
 def test_trajectory_planner_boundary_barrier_clamps_outward_motion() -> None:
@@ -616,7 +678,14 @@ def test_slot_allocator_reachability_cost_prefers_clear_slot() -> None:
 
 
 def test_obstacle_avoidance_all_blocked_falls_back_with_path() -> None:
-    ctrl = ObstacleAvoidanceController({"uav_radius": 0.10, "safety_margin": 0.10})
+    ctrl = ObstacleAvoidanceController(
+        {
+            "uav_radius": 0.10,
+            "safety_margin": 0.10,
+            "prefer_holonomic_tracking": False,
+            "use_sampled_planner": True,
+        }
+    )
     obstacles = [_obs(0.2, 0.0, 0.25), _obs(-0.2, 0.0, 0.25), _obs(0.0, 0.2, 0.25), _obs(0.0, -0.2, 0.25)]
 
     action, _yaw_rate, path, diag = ctrl.compute_action(
@@ -642,6 +711,9 @@ def test_inertial_rollout_brakes_near_boundary_with_momentum() -> None:
             "boundary_margin": 0.30,
             "w_speed": 0.0,
             "w_vel_smooth": 0.0,
+            "prefer_holonomic_tracking": False,
+            "use_sampled_planner": True,
+            "direct_los_enabled": False,
         }
     )
     pos = np.array([3.8, 2.0])
@@ -683,12 +755,13 @@ def test_inertial_rollout_rejects_coasting_into_obstacle() -> None:
     assert reach.blocked or reach.best_speed < 0.25 - 1e-6
 
 
-def test_e2_suite_uses_trajectory_planner_and_no_sce_methods() -> None:
-    suite = load_config("configs/benchmark/e2_obstacles_suite.yaml")
+def test_e2_suite_uses_sce_trajectory_planner_main_method() -> None:
+    suite = load_config("configs/benchmark/e2_obstacle_field_suite.yaml")
     methods = suite["methods"]
-    assert "trajectory_planner" in methods
-    assert all(not str(name).startswith("sce") for name in methods)
-    assert methods["trajectory_planner"]["config"].endswith("e2_obstacles_pyflyt_trajectory_planner.yaml")
+    assert "SCE" in methods
+    assert methods["SCE"]["config"].endswith("configs/experiment/e2/sce.yaml")
+    cfg = load_config(methods["SCE"]["config"])
+    assert "trajectory_planner" in cfg
 
 
 def test_should_replan_on_rho_change() -> None:

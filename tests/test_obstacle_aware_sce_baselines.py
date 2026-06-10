@@ -13,6 +13,7 @@ from marl_uav.control.obstacle_aware_sce_baselines import (
     _apply_turn_slowdown_actions,
     _resolve_cbf_config,
 )
+from marl_uav.control.slot_transition_manager import SlotTransitionManager
 from marl_uav.framework.geometry.obstacle_geometry import (
     Obstacle,
     collision_check_path,
@@ -428,6 +429,37 @@ def test_turn_safety_slowdown_immediately_points_to_new_direction() -> None:
 def test_structure_selection_default_does_not_optimize_slot_risk() -> None:
     cfg = StructureSelectionConfig.from_dict(None)
     assert cfg.w_slot_risk == 0.0
+
+
+def test_reachability_config_keeps_slot_transition_block() -> None:
+    cfg = ReachabilityConfig.from_dict({"slot_transition": {"enabled": True, "jump_detection_threshold": 0.7}})
+    assert cfg.slot_transition["enabled"] is True
+    assert cfg.slot_transition["jump_detection_threshold"] == 0.7
+
+
+def test_slot_transition_projects_raw_slot_inside_obstacle() -> None:
+    mgr = SlotTransitionManager(
+        world_xy=5.0,
+        uav_radius=0.1,
+        safety_margin=0.2,
+        dt=0.1,
+        slot_ref_vmax=1.0,
+        slot_ref_amax=2.0,
+        jump_detection_threshold=0.5,
+    )
+    obs = [_circle_obs(0.0, 0.0, 1.0)]
+    out = mgr.update(
+        raw_slot_pos=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        obstacles=obs,
+        step=1,
+    )
+    cmd = np.asarray(out["commanded_slot_pos"], dtype=np.float64)
+    assert not out["raw_slot_valid"]
+    assert out["raw_slot_inside_obstacle"]
+    assert out["proxy_slot_valid"]
+    assert out["commanded_slot_valid"]
+    assert not out["commanded_slot_inside_obstacle"]
+    assert float(np.linalg.norm(cmd[:2])) >= 1.3 - 1e-6
 
 
 def test_safety_speed_constraint_caps_full_speed_before_obstacle() -> None:

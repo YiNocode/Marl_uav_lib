@@ -48,6 +48,7 @@ class ObstacleAvoidanceConfig:
     prefer_holonomic_tracking: bool = True
     use_sampled_planner: bool = False
     position_kp: float = 1.0
+    velocity_kd: float = 0.0
     arrival_radius: float = 0.08
     yaw_time_constant: float = 0.35
     obstacle_influence_radius: float = 2.0
@@ -57,6 +58,11 @@ class ObstacleAvoidanceConfig:
     use_candidate_rollout_filter: bool = True
     world_xy: float | None = None
     boundary_margin: float = 0.30
+    boundary_activation_distance: float = 0.60
+    boundary_hard_margin: float = 0.05
+    boundary_braking_margin: float = 0.30
+    boundary_braking_gain: float = 1.0
+    max_inward_correction: float = 1.0
     amax_xy: float | None = None
 
     @classmethod
@@ -92,6 +98,7 @@ class ObstacleAvoidanceConfig:
             prefer_holonomic_tracking=bool(d.get("prefer_holonomic_tracking", cls.prefer_holonomic_tracking)),
             use_sampled_planner=bool(d.get("use_sampled_planner", cls.use_sampled_planner)),
             position_kp=float(d.get("position_kp", cls.position_kp)),
+            velocity_kd=float(d.get("velocity_kd", d.get("kd", cls.velocity_kd))),
             arrival_radius=float(d.get("arrival_radius", cls.arrival_radius)),
             yaw_time_constant=float(d.get("yaw_time_constant", cls.yaw_time_constant)),
             obstacle_influence_radius=float(d.get("obstacle_influence_radius", cls.obstacle_influence_radius)),
@@ -105,6 +112,15 @@ class ObstacleAvoidanceConfig:
             ),
             world_xy=None if world_xy is None else float(world_xy),
             boundary_margin=float(d.get("boundary_margin", cls.boundary_margin)),
+            boundary_activation_distance=float(
+                d.get("boundary_activation_distance", cls.boundary_activation_distance)
+            ),
+            boundary_hard_margin=float(d.get("boundary_hard_margin", cls.boundary_hard_margin)),
+            boundary_braking_margin=float(
+                d.get("boundary_braking_margin", d.get("boundary_hard_margin", cls.boundary_braking_margin))
+            ),
+            boundary_braking_gain=float(d.get("boundary_braking_gain", cls.boundary_braking_gain)),
+            max_inward_correction=float(d.get("max_inward_correction", cls.max_inward_correction)),
             amax_xy=None if d.get("amax_xy") is None else float(d["amax_xy"]),
         )
 
@@ -229,6 +245,144 @@ class ObstacleAvoidanceController:
         return v
 
     @staticmethod
+    def _boundary_records(
+        pos_xy: np.ndarray,
+        cfg: ObstacleAvoidanceConfig,
+        bounds_xy: tuple[float, float, float, float] | None,
+    ) -> list[tuple[str, np.ndarray, float]]:
+        p = np.asarray(pos_xy, dtype=np.float64).reshape(2)
+        if bounds_xy is not None:
+            xmin, xmax, ymin, ymax = (float(x) for x in bounds_xy)
+        elif cfg.world_xy is not None and np.isfinite(float(cfg.world_xy)):
+            half = max(float(cfg.world_xy) - max(float(cfg.boundary_margin), 0.0), 0.0)
+            xmin, xmax, ymin, ymax = -half, half, -half, half
+        else:
+            return []
+        return [
+            ("x_min", np.array([-1.0, 0.0], dtype=np.float64), float(p[0] - xmin)),
+            ("x_max", np.array([1.0, 0.0], dtype=np.float64), float(xmax - p[0])),
+            ("y_min", np.array([0.0, -1.0], dtype=np.float64), float(p[1] - ymin)),
+            ("y_max", np.array([0.0, 1.0], dtype=np.float64), float(ymax - p[1])),
+        ]
+
+    @staticmethod
+    def _add_inward_correction_preserve_tangent(
+        action_xy: np.ndarray,
+        normal: np.ndarray,
+        *,
+        correction: float,
+        vmax: float,
+    ) -> tuple[np.ndarray, float]:
+        action = np.asarray(action_xy, dtype=np.float64).reshape(2)
+        n = np.asarray(normal, dtype=np.float64).reshape(2)
+        requested = max(float(correction), 0.0)
+        if requested <= 0.0:
+            return action.copy(), 0.0
+        tangent = action - float(np.dot(action, n)) * n
+        tangent_norm = float(np.linalg.norm(tangent))
+        limit = max(float(vmax), 0.0)
+        if limit <= 0.0:
+            return action.copy(), 0.0
+        max_normal = float(np.sqrt(max(limit * limit - tangent_norm * tangent_norm, 0.0)))
+        current_outward = float(np.dot(action, n))
+        desired_outward = current_outward - requested
+        limited_outward = max(desired_outward, -max_normal)
+        applied = max(current_outward - limited_outward, 0.0)
+        return tangent + limited_outward * n, float(applied)
+
+    @staticmethod
+    def _componentwise_boundary_filter(
+        pos_xy: np.ndarray,
+        action_xy: np.ndarray,
+        current_velocity_xy: np.ndarray,
+        *,
+        cfg: ObstacleAvoidanceConfig,
+        bounds_xy: tuple[float, float, float, float] | None = None,
+    ) -> tuple[np.ndarray, bool, dict[str, Any]]:
+        u = np.asarray(action_xy, dtype=np.float64).reshape(2).copy()
+        before = u.copy()
+        vel = np.asarray(current_velocity_xy, dtype=np.float64).reshape(2)
+        records = ObstacleAvoidanceController._boundary_records(pos_xy, cfg, bounds_xy)
+        if not records:
+            return u, False, {"boundary_active_names": [], "boundary_projected_action_failed": False}
+
+        active_names: list[str] = []
+        details: dict[str, Any] = {}
+        projected_failed = False
+        activation = max(float(cfg.boundary_activation_distance), 0.0)
+        braking_margin_threshold = max(float(cfg.boundary_braking_margin), 0.0)
+        amax = (
+            max(float(cfg.amax_xy), 1e-9)
+            if cfg.amax_xy is not None
+            else max(float(cfg.vmax) / max(float(cfg.dt), 1e-6), 1e-9)
+        )
+
+        for name, normal, distance in records:
+            if distance > activation:
+                continue
+            active_names.append(name)
+            action_before_axis = u.copy()
+            v_out = float(np.dot(vel, normal))
+            action_out_before = float(np.dot(u, normal))
+            braking_distance = (max(v_out, 0.0) ** 2) / max(2.0 * amax, 1e-9)
+            braking_margin = float(distance - braking_distance)
+            inward_correction = 0.0
+
+            if action_out_before > 0.0:
+                u = u - action_out_before * normal
+            if braking_margin < braking_margin_threshold:
+                requested = float(cfg.boundary_braking_gain) * (braking_margin_threshold - braking_margin)
+                requested = min(max(requested, 0.0), max(float(cfg.max_inward_correction), 0.0))
+                u, inward_correction = ObstacleAvoidanceController._add_inward_correction_preserve_tangent(
+                    u,
+                    normal,
+                    correction=requested,
+                    vmax=float(cfg.vmax),
+                )
+            action_out_mid = float(np.dot(u, normal))
+            if action_out_mid > 0.0:
+                u = u - action_out_mid * normal
+
+            action_out_after = float(np.dot(u, normal))
+            if distance < float(cfg.boundary_hard_margin) and action_out_after > 1e-6:
+                projected_failed = True
+            normal_before = float(np.dot(before, normal))
+            normal_after = float(np.dot(u, normal))
+            details[name] = {
+                "distance_to_boundary": float(distance),
+                "velocity_outward_projection": float(v_out),
+                "action_outward_projection_before": float(action_out_before),
+                "action_outward_projection_after": float(action_out_after),
+                "estimated_braking_distance": float(braking_distance),
+                "braking_margin": float(braking_margin),
+                "inward_correction": float(inward_correction),
+                "normal_component_before": float(normal_before),
+                "normal_component_after": float(normal_after),
+                "tangential_norm_before": float(np.linalg.norm(before - normal_before * normal)),
+                "tangential_norm_after": float(np.linalg.norm(u - normal_after * normal)),
+                "axis_delta_norm": float(np.linalg.norm(u - action_before_axis)),
+            }
+
+        u = ObstacleAvoidanceController._clip_norm(u, float(cfg.vmax))
+        for name, normal, distance in records:
+            if name not in active_names:
+                continue
+            action_out_after = float(np.dot(u, normal))
+            if distance < float(cfg.boundary_hard_margin) and action_out_after > 1e-6:
+                projected_failed = True
+            if name in details:
+                details[name]["action_outward_projection_after"] = action_out_after
+
+        if projected_failed:
+            print("BOUNDARY_PROJECTED_ACTION_FAILED")
+
+        return u, bool(np.linalg.norm(u - before) > 1e-9), {
+            "boundary_active_names": active_names,
+            "boundary_filter_details": details,
+            "boundary_projected_action_failed": bool(projected_failed),
+        }
+
+    @staticmethod
     def _holonomic_barrier_tracking_action(
         pos: np.ndarray,
         goal: np.ndarray,
@@ -237,6 +391,7 @@ class ObstacleAvoidanceController:
         cfg: ObstacleAvoidanceConfig,
         *,
         feedforward_velocity_xy: np.ndarray | None = None,
+        current_velocity_xy: np.ndarray | None = None,
         bounds_xy: tuple[float, float, float, float] | None = None,
     ) -> tuple[np.ndarray, float, np.ndarray, dict[str, Any]]:
         """Pure-pursuit-like slot tracking with a local safety projection.
@@ -249,6 +404,11 @@ class ObstacleAvoidanceController:
         """
         p = np.asarray(pos, dtype=np.float64).reshape(2)
         g = np.asarray(goal, dtype=np.float64).reshape(2)
+        vel = (
+            np.zeros(2, dtype=np.float64)
+            if current_velocity_xy is None
+            else np.asarray(current_velocity_xy, dtype=np.float64).reshape(2)
+        )
         delta = g - p
         dist = float(np.linalg.norm(delta))
         if dist <= max(float(cfg.arrival_radius), 1e-6):
@@ -256,7 +416,7 @@ class ObstacleAvoidanceController:
             bearing = float(yaw)
         else:
             direction = delta / max(dist, 1e-9)
-            feedback = min(float(cfg.vmax), float(cfg.position_kp) * dist) * direction
+            feedback = float(cfg.position_kp) * delta
             bearing = float(np.arctan2(direction[1], direction[0]))
 
         ff = (
@@ -264,7 +424,7 @@ class ObstacleAvoidanceController:
             if feedforward_velocity_xy is None
             else np.asarray(feedforward_velocity_xy, dtype=np.float64).reshape(2)
         )
-        u_raw = feedback + ff
+        u_raw = feedback + ff - float(cfg.velocity_kd) * vel
         u = ObstacleAvoidanceController._clip_norm(u_raw, float(cfg.vmax))
 
         parsed_count = 0
@@ -304,20 +464,14 @@ class ObstacleAvoidanceController:
                     u = u + (lower_bound - inward) * n
                 u = ObstacleAvoidanceController._clip_norm(u, float(cfg.vmax))
 
-        if bounds_xy is not None:
-            xmin, xmax, ymin, ymax = bounds_xy
-            # Boundary projection is deliberately mild because the caller also
-            # applies the existing hard boundary barrier after this controller.
-            margin = max(float(cfg.boundary_margin), 1e-6)
-            if p[0] - xmin < margin and u[0] < 0.0:
-                u[0] = max(u[0], -barrier_gain * max(p[0] - xmin, 0.0))
-            if xmax - p[0] < margin and u[0] > 0.0:
-                u[0] = min(u[0], barrier_gain * max(xmax - p[0], 0.0))
-            if p[1] - ymin < margin and u[1] < 0.0:
-                u[1] = max(u[1], -barrier_gain * max(p[1] - ymin, 0.0))
-            if ymax - p[1] < margin and u[1] > 0.0:
-                u[1] = min(u[1], barrier_gain * max(ymax - p[1], 0.0))
-            u = ObstacleAvoidanceController._clip_norm(u, float(cfg.vmax))
+        u_before_boundary = u.copy()
+        u, boundary_active, boundary_diag = ObstacleAvoidanceController._componentwise_boundary_filter(
+            p,
+            u,
+            vel,
+            cfg=cfg,
+            bounds_xy=bounds_xy,
+        )
 
         speed = float(np.linalg.norm(u))
         if speed > 1e-9:
@@ -342,6 +496,7 @@ class ObstacleAvoidanceController:
             "assigned_slot_distance": float(dist),
             "selected_action_norm": float(speed),
             "raw_selected_speed": float(np.linalg.norm(u_raw)),
+            "nominal_cmd_xy": u_raw.astype(float).tolist(),
             "heading_speed_scale": 1.0,
             "goal_speed_scale": 1.0,
             "feedforward_speed_norm": float(np.linalg.norm(ff)),
@@ -352,8 +507,12 @@ class ObstacleAvoidanceController:
             "speed_gate": "holonomic_barrier",
             "out_of_bounds_candidate_count": 0,
             "boundary_margin": float(cfg.boundary_margin),
+            "boundary_filter_active": bool(boundary_active),
+            "action_before_boundary_filter": u_before_boundary.astype(float).tolist(),
+            "action_after_boundary_filter": u.astype(float).tolist(),
             "emergency_stop_reason": None,
         }
+        diag.update(boundary_diag)
         return u.astype(np.float64), yaw_rate, best_path.astype(np.float64), diag
 
     @staticmethod
@@ -468,6 +627,7 @@ class ObstacleAvoidanceController:
                 list(obstacles or []),
                 cfg,
                 feedforward_velocity_xy=feedforward_velocity_xy,
+                current_velocity_xy=vel_xy,
                 bounds_xy=bounds_xy,
             )
             diag["local_planner_time_ms"] = float((time.perf_counter() - t0) * 1000.0)

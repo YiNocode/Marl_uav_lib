@@ -1,5 +1,0 @@
-# MLP encoder/config
-
-type: mlp
-hidden_dims: [128, 128]
-activation: relu

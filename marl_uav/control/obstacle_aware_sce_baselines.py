@@ -28,6 +28,7 @@ from marl_uav.control.geometric_pursuit_baselines import (
     pursuer_yaws_from_backend,
     tube_tracking_body_actions,
 )
+from marl_uav.control.slot_transition_manager import SlotTransitionManager
 from marl_uav.framework.geometry.obstacle_adapter import (
     manifold_influencing_obstacles,
     obstacle_index,
@@ -131,6 +132,10 @@ class DeployControllerState:
     cached_reachability_diag: dict[str, Any] | None = None
     last_world_cmd_dirs: np.ndarray = field(default_factory=lambda: np.full((3, 2), np.nan, dtype=np.float64))
     turn_radius_prev_actions: np.ndarray = field(default_factory=lambda: np.zeros((3, 2), dtype=np.float64))
+    slot_transition_managers: list[SlotTransitionManager] = field(default_factory=list)
+    last_commanded_targets: np.ndarray | None = None
+    last_proxy_targets: np.ndarray | None = None
+    last_slot_transition_diag: list[dict[str, Any]] = field(default_factory=list)
 
     def reset_episode(self) -> None:
         self.path_cache.clear()
@@ -152,6 +157,10 @@ class DeployControllerState:
         self.cached_reachability_diag = None
         self.last_world_cmd_dirs = np.full((3, 2), np.nan, dtype=np.float64)
         self.turn_radius_prev_actions = np.zeros((3, 2), dtype=np.float64)
+        self.slot_transition_managers = []
+        self.last_commanded_targets = None
+        self.last_proxy_targets = None
+        self.last_slot_transition_diag = []
         self.episode_stats = _empty_episode_stats()
 
 
@@ -203,6 +212,16 @@ def _empty_episode_stats() -> dict[str, list[float]]:
         "min_predicted_clearance": [],
         "assigned_slot_distance": [],
         "selected_action_norm": [],
+        "slot_transition_enabled": [],
+        "raw_slot_valid_rate": [],
+        "proxy_slot_valid_rate": [],
+        "commanded_slot_valid_rate": [],
+        "commanded_transition_safe_rate": [],
+        "safe_hold_active_rate": [],
+        "raw_slot_too_unstable_rate": [],
+        "slot_transition_planner_called_rate": [],
+        "slot_transition_planner_success_rate": [],
+        "commanded_slot_lag_to_raw": [],
     }
 
 
@@ -234,6 +253,101 @@ def _uav_radius(task: Any, rcfg: ReachabilityConfig) -> float:
     if hasattr(task, "_pursuer_obstacle_hit_radius"):
         return float(task._pursuer_obstacle_hit_radius())
     return float(rcfg.uav_radius)
+
+
+def _slot_transition_enabled(rcfg: ReachabilityConfig, kind: DeployableKind) -> bool:
+    del kind
+    cfg = dict(getattr(rcfg, "slot_transition", {}) or {})
+    return bool(cfg.get("enabled", False))
+
+
+def _slot_reference_speed(task: Any, action_high: np.ndarray) -> float:
+    if hasattr(task, "pursuer_speed_xy"):
+        return max(float(getattr(task, "pursuer_speed_xy")), 1e-6)
+    high = np.asarray(action_high, dtype=np.float64).reshape(-1)
+    return max(float(np.max(np.abs(high[:2]))) if high.size >= 2 else 1.0, 1e-6)
+
+
+def _ensure_slot_transition_managers(
+    st: DeployControllerState,
+    task: Any,
+    rcfg: ReachabilityConfig,
+    rates: RuntimeRatesConfig,
+    action_high: np.ndarray,
+    planner_cfg: dict[str, Any],
+    *,
+    uav_r: float,
+) -> None:
+    cfg = dict(getattr(rcfg, "slot_transition", {}) or {})
+    world_xy = float(getattr(task, "world_xy", 20.0))
+    dt = 1.0 / max(float(rates.control_hz), 1e-6)
+    vmax = float(cfg.get("slot_ref_vmax", _slot_reference_speed(task, action_high)))
+    amax = float(cfg.get("slot_ref_amax", max(2.0 * vmax, 1e-6)))
+    transition_planner_cfg = dict(planner_cfg or {})
+    transition_planner_cfg.update(dict(cfg.get("planner") or {}))
+    desired = {
+        "world_xy": world_xy,
+        "uav_radius": float(uav_r),
+        "safety_margin": float(cfg.get("safety_margin", rcfg.safety_margin)),
+        "dt": dt,
+        "slot_ref_vmax": vmax,
+        "slot_ref_amax": amax,
+        "jump_detection_threshold": float(cfg.get("jump_detection_threshold", 0.5)),
+        "frequent_jump_min_interval_steps": int(cfg.get("frequent_jump_min_interval_steps", 20)),
+        "high_freq_factor": float(cfg.get("high_freq_factor", 1.25)),
+        "planner_cfg": transition_planner_cfg,
+    }
+    if len(st.slot_transition_managers) != 3:
+        st.slot_transition_managers = [SlotTransitionManager(**desired) for _ in range(3)]
+
+
+def _apply_slot_transition_managers(
+    st: DeployControllerState,
+    task: Any,
+    rcfg: ReachabilityConfig,
+    rates: RuntimeRatesConfig,
+    action_high: np.ndarray,
+    planner_cfg: dict[str, Any],
+    assigned_targets: np.ndarray,
+    pursuer_pos: np.ndarray,
+    obstacles: list[Any],
+    *,
+    kind: DeployableKind,
+    uav_r: float,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    raw = np.asarray(assigned_targets, dtype=np.float64).reshape(3, 3)
+    if not _slot_transition_enabled(rcfg, kind):
+        st.last_commanded_targets = raw.copy()
+        st.last_proxy_targets = raw.copy()
+        st.last_slot_transition_diag = []
+        return raw.astype(np.float32), raw.astype(np.float32), []
+
+    _ensure_slot_transition_managers(
+        st, task, rcfg, rates, action_high, planner_cfg, uav_r=uav_r,
+    )
+    commanded = np.zeros_like(raw, dtype=np.float64)
+    proxy = np.zeros_like(raw, dtype=np.float64)
+    diags: list[dict[str, Any]] = []
+    previous = st.last_commanded_targets
+    for i, mgr in enumerate(st.slot_transition_managers):
+        prev_i = None
+        if previous is not None and np.asarray(previous).shape == raw.shape:
+            prev_i = np.asarray(previous, dtype=np.float64)[i]
+        out = mgr.update(
+            raw_slot_pos=raw[i],
+            previous_commanded_slot_pos=prev_i,
+            uav_pos=np.asarray(pursuer_pos, dtype=np.float64).reshape(3, 3)[i],
+            obstacles=obstacles,
+            step=int(st.step_counter),
+        )
+        commanded[i] = np.asarray(out["commanded_slot_pos"], dtype=np.float64).reshape(3)
+        proxy[i] = np.asarray(out["proxy_slot_pos"], dtype=np.float64).reshape(3)
+        diags.append(dict(out))
+
+    st.last_commanded_targets = commanded.copy()
+    st.last_proxy_targets = proxy.copy()
+    st.last_slot_transition_diag = diags
+    return commanded.astype(np.float32), proxy.astype(np.float32), diags
 
 
 def _perceived_obstacles(
@@ -972,7 +1086,20 @@ def deployable_sce_actions_from_state(
             cost_diag = dict(st.cached_reachability_diag or {})
 
     assignment = st.cached_assignment
-    assigned_targets = targets[assignment]
+    raw_assigned_targets = np.asarray(targets[assignment], dtype=np.float32).copy()
+    assigned_targets, proxy_assigned_targets, slot_transition_diag = _apply_slot_transition_managers(
+        st,
+        task,
+        rcfg,
+        rates,
+        action_high,
+        planner_cfg,
+        raw_assigned_targets,
+        pursuer_pos,
+        obstacles,
+        kind=kind,
+        uav_r=uav_r,
+    )
     task_state.assigned_target_indices = np.asarray(assignment, dtype=np.int64).copy()
     st.timing.assignment.record((time.perf_counter() - t0) * 1000.0)
     if "los_check_time_ms" in cost_diag:
@@ -1035,7 +1162,7 @@ def deployable_sce_actions_from_state(
 
         for i in range(3):
             slot_j = int(assignment[i])
-            goal_xy = targets[slot_j, :2]
+            goal_xy = assigned_targets[i, :2]
             # A single perceived obstacle set is used for path planning,
             # collision checking, LOS, shortcut validation, and CBF.  Local
             # perception is explicit via rcfg.obstacle_mode; termination still
@@ -1396,6 +1523,28 @@ def deployable_sce_actions_from_state(
     min_predicted_clearances = [float(d.get("min_predicted_clearance", np.nan)) for d in turn_radius_debug]
     assigned_slot_distances = [float(d.get("assigned_slot_distance", np.nan)) for d in turn_radius_debug]
     selected_action_norms = [float(d.get("selected_action_norm", np.nan)) for d in turn_radius_debug]
+    slot_transition_enabled = 1.0 if _slot_transition_enabled(rcfg, kind) else 0.0
+    slot_transition_bool_keys = {
+        "raw_slot_valid_rate": "raw_slot_valid",
+        "proxy_slot_valid_rate": "proxy_slot_valid",
+        "commanded_slot_valid_rate": "commanded_slot_valid",
+        "commanded_transition_safe_rate": "commanded_transition_segment_safe",
+        "safe_hold_active_rate": "safe_hold_active",
+        "raw_slot_too_unstable_rate": "raw_slot_too_unstable",
+        "slot_transition_planner_called_rate": "slot_planner_called",
+        "slot_transition_planner_success_rate": "slot_planner_success",
+    }
+    slot_transition_rates = {
+        out_key: _mean_finite([
+            1.0 if bool(d.get(in_key, False)) else 0.0
+            for d in slot_transition_diag
+        ], 0.0)
+        for out_key, in_key in slot_transition_bool_keys.items()
+    }
+    commanded_slot_lags = [
+        float(d.get("commanded_slot_lag_to_raw", np.nan))
+        for d in slot_transition_diag
+    ]
     stale_path_rate = float(stale_paths / 3.0) if use_path_kind else 0.0
     unreachable_slot_rate = float(cost_diag.get("unreachable_slot_rate", 0.0))
     if "slot_reachable_rate" not in cost_diag and "pair_feasible_matrix" in cost_diag:
@@ -1462,6 +1611,9 @@ def deployable_sce_actions_from_state(
         "min_predicted_clearance": _min_finite(min_predicted_clearances),
         "assigned_slot_distance": _mean_finite(assigned_slot_distances),
         "selected_action_norm": _mean_finite(selected_action_norms),
+        "slot_transition_enabled": slot_transition_enabled,
+        **slot_transition_rates,
+        "commanded_slot_lag_to_raw": _mean_finite(commanded_slot_lags, 0.0),
         "decision_time_ms": decision_ms,
         "decision_total_ms": decision_ms,
         "waypoint_tracking_time_ms": st.timing.waypoint.samples_ms[-1] if st.timing.waypoint.samples_ms else 0.0,
@@ -1469,7 +1621,7 @@ def deployable_sce_actions_from_state(
     if use_path_kind and should_record_control_timing(env):
         plens, wps, cf = [], [], []
         for i in range(3):
-            goal_xy = targets[int(assignment[i]), :2]
+            goal_xy = assigned_targets[i, :2]
             validate_obs = obstacles
             path = st.path_cache.get_agent_path(i)
             if path is not None:
@@ -1504,7 +1656,11 @@ def deployable_sce_actions_from_state(
             entry = {
                 "slot_id": int(assignment[i]),
                 "track_target_xy": assigned_targets[i, :2].astype(float).tolist(),
-                "slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_target_xy": raw_assigned_targets[i, :2].astype(float).tolist(),
+                "raw_slot_target_xy": raw_assigned_targets[i, :2].astype(float).tolist(),
+                "proxy_slot_target_xy": proxy_assigned_targets[i, :2].astype(float).tolist(),
+                "commanded_slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_transition": slot_transition_diag[i] if i < len(slot_transition_diag) else {},
                 "assigned_path_xy": None,
                 "corridor_obstacle_indices": [],
                 "speed_cmd_xy": float(np.hypot(actions[i, 0], actions[i, 1])),
@@ -1523,7 +1679,7 @@ def deployable_sce_actions_from_state(
         }
     elif use_path_follow:
         for i in range(3):
-            goal_xy = targets[int(assignment[i]), :2]
+            goal_xy = assigned_targets[i, :2]
             corridor_obs = obstacles_in_corridor(
                 pursuer_pos[i, :2], goal_xy, obstacles, oq_cfg.corridor_half_width,
             )
@@ -1535,7 +1691,11 @@ def deployable_sce_actions_from_state(
             entry: dict[str, Any] = {
                 "slot_id": int(assignment[i]),
                 "track_target_xy": track_targets[i, :2].astype(float).tolist(),
-                "slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_target_xy": raw_assigned_targets[i, :2].astype(float).tolist(),
+                "raw_slot_target_xy": raw_assigned_targets[i, :2].astype(float).tolist(),
+                "proxy_slot_target_xy": proxy_assigned_targets[i, :2].astype(float).tolist(),
+                "commanded_slot_target_xy": assigned_targets[i, :2].astype(float).tolist(),
+                "slot_transition": slot_transition_diag[i] if i < len(slot_transition_diag) else {},
                 "assigned_path_xy": agent_paths_xy[i],
                 "corridor_obstacle_indices": corridor_idx,
                 "speed_cmd_xy": float(br["speed_cmd_xy"]),
@@ -1599,6 +1759,7 @@ def deployable_sce_actions_from_state(
             st.slot_projection_moved.astype(int).tolist()
             if st.slot_projection_moved is not None else [0, 0, 0]
         ),
+        "slot_transition": slot_transition_diag,
         "structure_slot_selection": slot_sel_diag,
     }
     if use_path_kind or use_turn_radius_slot:

@@ -3,7 +3,7 @@
 Example (SCE, no training required):
 
     python scripts/run_debug_browser.py \\
-        --config configs/experiment/e1_1_open_space_pyflyt_sce.yaml \\
+        --config configs/experiment/e2/sce.yaml \\
         --seed 101
 
 Then open http://127.0.0.1:8765/ in a browser.
@@ -44,6 +44,10 @@ from marl_uav.control.obstacle_aware_sce_baselines import (
     make_sce_reachability_slot_get_actions_fn,
     make_sce_turn_radius_slot_get_actions_fn,
 )
+from marl_uav.control.obstacle_apf_baselines import (
+    make_fixed_ring_apf_get_actions_fn,
+    make_pure_pursuit_apf_get_actions_fn,
+)
 from marl_uav.control.sce_controller import make_sce_get_actions_fn
 from marl_uav.control.trajectory_planner import make_trajectory_planner_get_actions_fn
 from slot_exec_mappo.adapter import make_slot_exec_get_actions_fn
@@ -61,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=str,
-        default="configs/experiment/e2_obstacles_pyflyt_trajectory_planner.yaml",
+        default="configs/experiment/e2/sce.yaml",
     )
     p.add_argument("--seed", type=int, default=101)
     p.add_argument("--episodes", type=int, default=10, help="Number of episodes to run sequentially.")
@@ -86,8 +90,16 @@ def parse_args() -> argparse.Namespace:
 def _build_get_actions_fn(env: Any, cfg: dict[str, Any]):
     if "fixed_ring" in cfg:
         return make_fixed_ring_get_actions_fn(env, **dict(cfg.get("fixed_ring", {}) or {}))
+    if "fixed_ring_apf" in cfg:
+        return make_fixed_ring_apf_get_actions_fn(
+            env, **dict(cfg.get("fixed_ring_apf", {}) or {})
+        )
     if "pure_pursuit" in cfg:
         return make_pure_pursuit_get_actions_fn(env, **dict(cfg.get("pure_pursuit", {}) or {}))
+    if "pure_pursuit_apf" in cfg:
+        return make_pure_pursuit_apf_get_actions_fn(
+            env, **dict(cfg.get("pure_pursuit_apf", {}) or {})
+        )
     if "oracle_slot" in cfg:
         return make_oracle_slot_get_actions_fn(env, **dict(cfg.get("oracle_slot", {}) or {}))
     if "hungarian_slot" in cfg:
@@ -275,7 +287,9 @@ def main() -> None:
     controller_cfg: dict[str, Any] = {}
     for key in (
         "pure_pursuit",
+        "pure_pursuit_apf",
         "fixed_ring",
+        "fixed_ring_apf",
         "oracle_slot",
         "hungarian_slot",
         "ot_slot",
@@ -333,7 +347,8 @@ def main() -> None:
     else:
         raise ValueError(
             f"Config {cfg_path} must define sce/oracle_slot/hungarian_slot/ot_slot/"
-            "pure_pursuit/fixed_ring/trajectory_planner/slot_exec_mappo/"
+            "pure_pursuit/pure_pursuit_apf/fixed_ring/fixed_ring_apf/"
+            "trajectory_planner/slot_exec_mappo/"
             "sce_turn_radius_slot/sce_reachability_slot/sce_reachability_cbf_slot "
             "or algo+model for RL debug."
         )

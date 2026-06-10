@@ -1,0 +1,16 @@
+task_defaults:
+  name: pursuit_evasion_3v1_ex2
+  world_xy: 20.0
+  z_min: 0.5
+  z_max: 5.0
+  capture_dist: 1.0
+  episode_limit: 3000
+  obstacle_grid_spacing: 5.0
+  obstacle_radius_min_ratio: 0.012
+  obstacle_radius_max_ratio: 0.045
+  obstacle_min_gap_xy_ratio: 0.02
+  arena_edge_margin_ratio: 0.08
+  pursuer_obstacle_hit_radius_ratio: 0.015
+  init_clearance_extra_ratio: 0.02
+  obstacle_collision_penalty: 15.0
+  max_obstacle_place_trials: 8000

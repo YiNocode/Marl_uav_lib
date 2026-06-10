@@ -1,0 +1,39 @@
+suite: E2
+scenario: obstacle_field
+backend: pyflyt
+result_root: results/e2_obstacle_field_pyflyt
+
+eval_seeds: [201, 202, 203]
+train_seeds: [101]
+eval:
+  base_seed: 8010
+  episodes_per_seed: 200
+  terminal_window: 30
+  holdout_seeds: [201, 202, 203]
+
+variants:
+  - name: spacing_5m
+    obstacle_grid_spacing: 5.0
+
+methods:
+  pure_pursuit_apf:
+    kind: heuristic
+    config: configs/experiment/e2/pure_pursuit_apf.yaml
+    paper_name: pure_pursuit_apf
+    train: false
+  fixed_ring_apf:
+    kind: heuristic
+    config: configs/experiment/e2/fixed_ring_apf.yaml
+    paper_name: fixed_ring_apf
+    train: false
+  SCE:
+    kind: heuristic
+    config: configs/experiment/e2/sce.yaml
+    paper_name: SCE
+    train: false
+  fixed_ring_bc_curriculum_mappo:
+    kind: rl
+    config: configs/experiment/e2/bc_curriculum_mappo.yaml
+    paper_name: fixed_ring_bc_curriculum_mappo
+    train: true
+    train_seeds: [101]

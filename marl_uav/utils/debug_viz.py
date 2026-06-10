@@ -148,8 +148,16 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             fixed_ring_targets=True,
             fixed_ring_curve=True,
         )
+    if "fixed_ring_apf" in cfg:
+        return _profile(
+            "fixed_ring_apf",
+            fixed_ring_targets=True,
+            fixed_ring_curve=True,
+        )
     if "pure_pursuit" in cfg:
         return _profile("pure_pursuit", pursuit_targets=True)
+    if "pure_pursuit_apf" in cfg:
+        return _profile("pure_pursuit_apf", pursuit_targets=True)
     if "algo" in cfg:
         model_ref = str(cfg.get("model", "")).lower()
         if "dream_mappo" in model_ref:
@@ -184,8 +192,12 @@ def resolve_viz_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         return resolve_viz_profile({**cfg, "sce_turn_radius_slot": {}})
     if method in ("fixed_ring", "fixedring"):
         return resolve_viz_profile({**cfg, "fixed_ring": {}})
+    if method in ("fixed_ring_apf", "fixedring_apf"):
+        return resolve_viz_profile({**cfg, "fixed_ring_apf": {}})
     if method in ("pure_pursuit", "purepursuit"):
         return resolve_viz_profile({**cfg, "pure_pursuit": {}})
+    if method in ("pure_pursuit_apf", "purepursuit_apf"):
+        return resolve_viz_profile({**cfg, "pure_pursuit_apf": {}})
     if method in ("dream_mappo_full", "dream_mappo"):
         return resolve_viz_profile({**cfg, "algo": "x", "model": "dream_mappo"})
     if method in ("mappo", "mappo_bc"):

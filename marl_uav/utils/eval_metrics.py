@@ -68,13 +68,25 @@ def episode_metrics_from_info(
     dang = value_array(series, "D_ang")
     phi_max = phi_max_array(series)
 
+    raw_reason = str(info.get("termination_reason", "") or "").strip().lower()
     captured = bool(info.get("capture", False) or info.get("captured", False))
-    obstacle_terminal = bool(info.get("obstacle_termination", False))
-    timeout = bool(info.get("timeout", False))
-    out_of_bounds = bool(info.get("out_of_bounds", False))
+    obstacle_terminal = bool(
+        info.get("obstacle_termination", False)
+        or info.get("obstacle_terminated", False)
+        or info.get("pursuer_obstacle_hit", False)
+        or raw_reason in ("obstacle", "obstacle_collision", "collision_obstacle")
+    )
+    timeout = bool(info.get("timeout", False) or raw_reason == "timeout")
+    out_of_bounds = bool(
+        info.get("out_of_bounds", False)
+        or info.get("pursuer_oob", False)
+        or info.get("too_many_pursuers_oob", False)
+        or info.get("evader_oob", False)
+        or raw_reason in ("out_of_bounds", "pursuer_oob", "evader_oob")
+    )
     collision = bool(info.get("collision", False) or info.get("has_collision", False))
 
-    if captured:
+    if captured or raw_reason in ("capture", "truncated_success"):
         terminal_reason = "capture"
     elif obstacle_terminal:
         terminal_reason = "obstacle_collision_terminal"
@@ -112,6 +124,7 @@ def episode_metrics_from_info(
         "terminal_other_failure": int(terminal_reason == "other_failure"),
         "collision": int(collision),
         "any_collision": int(collision or obstacle_terminal),
+        "obstacle_collision_rate": int(terminal_reason == "obstacle_collision_terminal"),
         "inter_agent_collision_rate": int(terminal_reason == "inter_agent_collision_terminal"),
         "obstacle_termination": int(obstacle_terminal),
         "timeout": int(timeout),
@@ -168,9 +181,17 @@ def aggregate_eval_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
         "num_episodes": float(len(rows)),
         "capture_rate": mean_key("captured"),
         "collision_rate": mean_key("collision"),
+        "terminal_capture_rate": mean_key("terminal_capture"),
+        "terminal_obstacle_collision_rate": mean_key("terminal_obstacle_collision"),
+        "obstacle_collision_rate": mean_key("terminal_obstacle_collision"),
+        "terminal_inter_agent_collision_rate": mean_key("terminal_inter_agent_collision"),
+        "terminal_out_of_bounds_rate": mean_key("terminal_out_of_bounds"),
+        "terminal_timeout_rate": mean_key("terminal_timeout"),
+        "terminal_other_failure_rate": mean_key("terminal_other_failure"),
         "obstacle_termination_rate": mean_key("obstacle_termination"),
         "timeout_rate": mean_key("timeout"),
         "out_of_bounds_rate": mean_key("out_of_bounds"),
+        "other_failure_rate": mean_key("terminal_other_failure"),
         "bc_action_mse": mean_key("bc_action_mse"),
         "bc_action_cosine_similarity": mean_key("bc_action_cosine_similarity"),
     }
